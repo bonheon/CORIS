@@ -1,0 +1,238 @@
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { CalendarClock, Share2 } from "lucide-react";
+import { api, Attachment, RouteInfo, streamChat, ToolRun, UserCtx } from "../api";
+import { Message } from "../types";
+import { useHub } from "../hub";
+import MessageBubble from "../components/MessageBubble";
+import Composer from "../shell/Composer";
+import ChatContext from "./ChatContext";
+import { getFollowUpSuggestions, STARTERS } from "../lib/suggestions";
+
+let seq = 0;
+const localId = () => `m${Date.now().toString(36)}${++seq}`;
+
+interface Props {
+  convId: string | null;
+  navigate: (p: string, replace?: boolean) => void;
+}
+
+export default function ChatPage({ convId, navigate }: Props) {
+  const { meta, refreshConversations, refreshEvents, takePending, pendingTick, agentName, toast, conversations } = useHub();
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [agentId, setAgentId] = useState("auto");
+  const [skillId, setSkillId] = useState<string | null>(null);
+  const [toolSel, setToolSel] = useState<string[]>([]);   // 비어 있으면 자동
+  const [busy, setBusy] = useState(false);
+  const [loadErr, setLoadErr] = useState<string | null>(null);
+
+  const idRef = useRef<string | null>(convId);     // 현재 대화 id (새 대화면 meta 이벤트로 채워짐)
+  const ownId = useRef<string | null>(null);       // 이 화면이 방금 만든 대화 — 라우트 변경 시 다시 불러오지 않음
+  const abort = useRef<AbortController | null>(null);
+  const bottom = useRef<HTMLDivElement>(null);
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
+
+  // ── 라우트 변경: 대화 불러오기 / 초기화 ──
+  useEffect(() => {
+    if (convId && convId === ownId.current) return;
+    abort.current?.abort();
+    idRef.current = convId;
+    ownId.current = null;
+    setLoadErr(null);
+    // 같은 커밋에서 바로 send() 가 불릴 수 있으므로 ref 도 즉시 비운다
+    messagesRef.current = [];
+    setMessages([]);
+    if (!convId) return;
+    let alive = true;
+    api.conversation(convId).then(
+      (c) => {
+        if (!alive) return;
+        setAgentId(c.agent_id || "auto");
+        setSkillId(c.skill_id);
+        setMessages(c.messages.map((m, i) => ({ id: `${c.id}-${i}`, role: m.role, content: m.content, at: m.at, tools: m.tools, route: m.route, attachments: m.attachments })));
+      },
+      () => alive && setLoadErr("대화를 불러오지 못했습니다"),
+    );
+    return () => { alive = false; };
+  }, [convId]);
+
+  useEffect(() => {
+    bottom.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [messages]);
+
+  const patchLast = (fn: (m: Message) => Message) =>
+    setMessages((prev) => prev.map((m, i) => (i === prev.length - 1 ? fn(m) : m)));
+
+  const send = useCallback(async (text: string, agent = agentId, skill = skillId, tools = toolSel, attachments: Attachment[] = []) => {
+    const now = new Date().toISOString();
+    const startedAt = Date.now();
+    const history: Message[] = [...messagesRef.current, { id: localId(), role: "user", content: text, at: now, attachments }];
+    setMessages([...history, { id: localId(), role: "assistant", content: "", at: now, streaming: true, tools: [], startedAt }]);
+    setBusy(true);
+    const ctrl = new AbortController();
+    abort.current = ctrl;
+    let created = false;
+
+    try {
+      await streamChat(
+        {
+          messages: history.map((m) => ({ role: m.role, content: m.content, attachments: m.attachments?.map((a) => a.id) })),
+          conversation_id: idRef.current,
+          agent_id: agent,
+          skill_id: skill,
+          tool_selection: tools.length ? { tools } : null,
+        },
+        {
+          onMeta: (id) => {
+            if (!idRef.current) {
+              idRef.current = id;
+              ownId.current = id;
+              created = true;
+              navigate(`/c/${id}`, true);
+            }
+          },
+          onUser: (userCtx: UserCtx) => patchLast((m) => ({ ...m, userCtx })),
+          onRoute: (route: RouteInfo) => patchLast((m) => ({ ...m, route })),
+          onDelta: (t) => patchLast((m) => ({ ...m, content: m.content + t })),
+          onToolStart: (run: ToolRun) => patchLast((m) => ({ ...m, tools: [...(m.tools ?? []), run] })),
+          onToolEnd: (id, ms, ok) =>
+            patchLast((m) => ({ ...m, toolMark: m.content.length, tools: m.tools?.map((r) => (r.id === id ? { ...r, ms, ok } : r)) })),
+          onError: (msg) => patchLast((m) => ({ ...m, error: `에이전트 오류: ${msg}` })),
+        },
+        ctrl.signal,
+      );
+    } catch (e: any) {
+      if (e?.name !== "AbortError") {
+        patchLast((m) => ({ ...m, error: "응답을 받지 못했습니다. 백엔드 서버를 확인해주세요." }));
+      }
+    } finally {
+      patchLast((m) => ({ ...m, streaming: false, elapsed: Date.now() - startedAt }));
+      setBusy(false);
+      if (abort.current === ctrl) abort.current = null;
+      refreshConversations().catch(() => {});
+      if (created) ownId.current = idRef.current;
+    }
+  }, [agentId, skillId, toolSel, navigate, refreshConversations]);
+
+  // 홈 / 스킬 화면에서 넘어온 질문 바로 실행
+  useEffect(() => {
+    if (convId) return;
+    const p = takePending();
+    if (!p) return;
+    setAgentId(p.agentId);
+    setSkillId(p.skillId);
+    setToolSel(p.tools ?? []);
+    send(p.text, p.agentId, p.skillId, p.tools ?? [], p.attachments ?? []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingTick, convId]);
+
+  const stop = useCallback(() => abort.current?.abort(), []);
+
+  // agent 를 바꾸면 그 agent 범위 밖 tool 은 선택에서 뺀다 (자동이면 그대로)
+  const changeAgent = useCallback((id: string) => {
+    setAgentId(id);
+    const pool = id === "auto" ? null : meta?.agents.find((a) => a.id === id)?.tools;
+    if (pool) setToolSel((sel) => sel.filter((t) => pool.includes(t)));
+  }, [meta]);
+
+  const lastRoute = useMemo(
+    () => [...messages].reverse().find((m) => m.role === "assistant" && m.route)?.route ?? null,
+    [messages],
+  );
+  const onSend = useCallback((t: string, a?: Attachment[]) => send(t, undefined, undefined, undefined, a), [send]);
+
+  const title = useMemo(() => {
+    if (!convId) return "새 대화";
+    return conversations.find((c) => c.id === convId)?.title
+      ?? messages.find((m) => m.role === "user")?.content.slice(0, 40)
+      ?? "대화";
+  }, [convId, conversations, messages]);
+
+  const lastAI = [...messages].reverse().find((m) => m.role === "assistant" && !m.streaming);
+  const followUps = !busy && lastAI && !lastAI.error ? getFollowUpSuggestions(lastAI.content).slice(0, 3) : [];
+
+  // 마지막 질문을 매일 아침 실행하는 이벤터로 등록 (비활성 상태로 만들고 이벤터 화면에서 확인)
+  const scheduleDaily = useCallback(async () => {
+    const q = [...messagesRef.current].reverse().find((m) => m.role === "user");
+    if (!q) return;
+    await api.createEvent({
+      name: q.content.slice(0, 30),
+      schedule: { kind: "daily", time: "07:30", weekday: null },
+      prompt: q.content, skill_id: skillId, agent_id: agentId, target: "", enabled: false,
+    });
+    await refreshEvents();
+    toast(`이벤터에 등록했습니다 · 매일 07:30 (꺼짐 상태)`);
+    navigate("/events");
+  }, [agentId, skillId, navigate, refreshEvents, toast]);
+
+  const copyLink = () => {
+    navigator.clipboard?.writeText(window.location.href).then(() => toast("대화 링크를 복사했습니다"), () => {});
+  };
+
+  return (
+    <>
+      <section className="center">
+        <header className="c-head">
+          <b>{title}</b>
+          {convId && (
+            <span className="agent-badge" title={lastRoute?.route_reason}>
+              <i />{agentId === "auto" && lastRoute ? `자동 → ${lastRoute.agent_name}` : agentName(agentId)}
+            </span>
+          )}
+          {convId && (
+            <div className="right">
+              <button className="ib" title="링크 복사" onClick={copyLink}><Share2 size={15} /></button>
+              <button className="ib" title="이벤터로 등록" onClick={scheduleDaily} disabled={busy}>
+                <CalendarClock size={15} />
+              </button>
+            </div>
+          )}
+        </header>
+
+        <div className="scroll">
+          <div className="inner">
+            {loadErr && <div className="err-msg">{loadErr}</div>}
+            {!convId && messages.length === 0 && (
+              <div className="empty">
+                <h1>무엇을 확인할까요?</h1>
+                <p>질문하면 에이전트가 필요한 tool을 골라 조회합니다. 에이전트나 스킬을 고르면 tool 후보가 줄어 더 정확해집니다.</p>
+                <div className="starters">
+                  {STARTERS.map((s) => (
+                    <button key={s.q} className="starter" onClick={() => { setAgentId(s.agent); send(s.q, s.agent, skillId); }}>
+                      <div className="k">{s.k}</div>
+                      <b>{s.q}</b>
+                      <small>{s.d}</small>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {messages.map((m) => <MessageBubble key={m.id} message={m} />)}
+            {followUps.length > 0 && (
+              <div className="follow">
+                {followUps.map((q) => <button key={q} className="chip" onClick={() => send(q)}>{q}</button>)}
+              </div>
+            )}
+            <div ref={bottom} />
+          </div>
+        </div>
+
+        <Composer
+          onSend={onSend}
+          onStop={stop}
+          busy={busy}
+          agentId={agentId}
+          skillId={skillId}
+          onAgentChange={changeAgent}
+          onSkillChange={setSkillId}
+          selectedTools={toolSel}
+          onToolsChange={setToolSel}
+          placeholder={messages.length ? "이어서 질문하세요…" : undefined}
+          autoFocus
+        />
+      </section>
+
+      <ChatContext messages={messages} route={lastRoute} agentId={agentId} skillId={skillId} hasConversation={!!convId} busy={busy} navigate={navigate} onSchedule={scheduleDaily} />
+    </>
+  );
+}

@@ -1,0 +1,64 @@
+# Hub 카탈로그 — agent 와 tool 그룹 정의.
+#
+# 두 개념은 기준이 다르다.
+#   group = 데이터 영역 (무엇을 조회하나)   → 사용자가 묶음 단위로 켜고 끈다
+#   agent = 업무 방식   (어떻게 다루나)     → 프롬프트 · 허용 범위 · 기본 그룹
+# 프롬프트가 다르지 않다면 agent 를 늘리지 말고 skill(skills/<id>/SKILL.md) 이나 group 으로 해결한다.
+#
+# tool 이름은 MCP 서버(mcp_servers.yaml)가 내려주는 이름과 같아야 한다.
+# 로드 시 검증해서 모르는 이름은 경고만 남기고 "사용 불가" 로 취급한다.
+
+groups:
+  - id: general
+    name: 기본
+    description: 시각 등 공통 유틸리티
+    tools: [get_current_time]
+
+  - id: notice
+    name: 공지 (예시)
+    description: 사내 공지 검색 — 예시 MCP 서버(mcp_servers/example)
+    tools: [search_notices]
+
+  - id: metric
+    name: 지표 추이 (예시)
+    description: 설비 공정 지표 Trend — 예시 MCP 서버의 Mock 데이터
+    tools: [get_metric_trend]
+
+  - id: code
+    name: 코드 실행
+    description: Python 으로 계산 · 가공 · 자유 형식 차트 (mcp_servers/code_interpreter)
+    tools: [run_python]
+
+# 화면 전용 tool — 카드 컴포넌트가 GET /api/ui/{tool} 로 부른다 (routers/ui.py). LLM 에는 절대 묶지 않는다.
+# 회사 MCP 로 옮길 때 같은 이름 · 인자 · JSON 모양으로 제공하면 화면도 그대로 붙는다.
+ui_tools: [ui_notices, ui_metric_trend, ui_artifact]
+
+# tool 이름 → 화면 표시명 (없으면 tool 이름 그대로 보인다)
+tool_labels:
+  get_current_time: 현재 시각
+  search_notices: 공지 검색
+  get_metric_trend: 지표 추이
+  run_python: Python 실행
+
+# include_imported: 화면에서 등록한 MCP 서버 group 을 허용 범위에 넣는다 (서버의 '기본으로 켜기' 면 기본 group 에도).
+# 첫 번째 agent 가 fallback 이다 — Router 가 판단하지 못하거나 오류가 나면 여기로 간다.
+# 그래서 영역을 넘나드는 질문을 받아줄 수 있도록 allowed_groups 가 가장 넓어야 한다.
+# agent 가 1개면 Router 는 skill 선택에만 쓰인다.
+agents:
+  - id: coris
+    name: Coris
+    description: 범용 업무 어시스턴트 — 조회 · 정리 · 분석
+    route_hint: |
+      일반적인 업무 질문, 데이터 조회, 여러 영역에 걸친 질문.
+    allowed_groups: [general, notice, metric, code]
+    default_groups: [general, notice, metric, code]
+    include_imported: true   # 화면(MCP)에서 등록한 서버의 tool 도 쓸 수 있다
+    prompt: |
+      당신은 사내 업무 어시스턴트 'Coris' 입니다.
+      - 현황과 수치는 반드시 tool 로 조회한 결과만 근거로 답합니다.
+      - 질문이 여러 영역에 걸치면 필요한 tool 을 함께 호출해 한 답변으로 종합합니다.
+
+# 포탈 화면에 보일 외부 시스템 — 실제 health check 연동 전까지 고정 상태값
+portals:
+  - {id: ceeria, name: Ceeria, description: C&C 지식 챗봇, status: ok, note: 정상, url: "#"}
+  - {id: example, name: 예시 시스템, description: 연동 예정 시스템 자리, status: warn, note: 미연동, url: "#"}

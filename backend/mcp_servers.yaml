@@ -1,0 +1,28 @@
+# MCP 서버 접속 정보 — 백엔드의 tool 은 전부 여기 적힌 서버에서 가져온다.
+#
+# ${VAR} 와 ${VAR:-기본값} 은 환경변수(.env)로 치환된다. 토큰은 yaml 에 직접 쓰지 말고 .env 에 둔다.
+# 서버 하나가 죽어도 나머지 서버의 tool 은 정상 동작하고, 죽은 서버의 tool 은 "사용 불가" 로 표시된다.
+# 같은 이름의 tool 이 여러 서버에 있으면 위에 적힌 서버가 이긴다(경고 로그).
+
+servers:
+  # 로컬 개발용 예시 서버 — mcp_servers/example/server.py
+  #   실행: cd mcp_servers/example && python server.py
+  example:
+    enabled: ${EXAMPLE_MCP_ENABLED:-true}
+    transport: streamable_http
+    url: ${EXAMPLE_MCP_URL:-http://localhost:8100/mcp}
+
+  # code interpreter — mcp_servers/code_interpreter/server.py (전용 venv)
+  #   실행: cd mcp_servers/code_interpreter && .venv/bin/python server.py
+  code_interpreter:
+    enabled: ${CODE_MCP_ENABLED:-true}
+    transport: streamable_http
+    url: ${CODE_MCP_URL:-http://localhost:8120/mcp}
+
+  # ── 회사 MCP 서버 예시 ── 주소/토큰만 채우고 enabled 를 true 로
+  company:
+    enabled: ${COMPANY_MCP_ENABLED:-false}
+    transport: streamable_http
+    url: ${COMPANY_MCP_URL:-https://mcp.example.com/mcp}
+    headers:
+      Authorization: Bearer ${COMPANY_MCP_TOKEN:-}
