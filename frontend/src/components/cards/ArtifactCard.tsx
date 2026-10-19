@@ -38,7 +38,7 @@ export default function ArtifactCard({ id }: { id: string }) {
     <div className="panel" style={{ margin: 0 }}>
       <div className="panel-h">
         <b>{data.title}</b>
-        <small>Python 실행 결과 · {data.kind === "html" ? "대화형" : "이미지"}</small>
+        <small>Python 실행 결과 · {data.kind === "html" ? "드래그 확대 · 더블클릭 초기화" : "이미지"}</small>
         <button className="ghost" style={{ marginLeft: "auto" }} onClick={save}><Download size={12} />저장</button>
       </div>
       <div className="panel-b" style={{ paddingTop: 4 }}>

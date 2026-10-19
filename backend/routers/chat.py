@@ -10,6 +10,7 @@ POST /api/chat — SSE 스트리밍.
   {"type": "tool_start", "id", "name", "args"}  (첨부 이미지 해석도 name=image_analysis 로 온다)
   {"type": "tool_end", "id", "name", "ms", "ok"}
   {"type": "delta", "delta"}                   텍스트 토큰
+  {"type": "suggestions", "items"}             답변 후 추천 후속 질문 (없으면 보내지 않음)
   {"type": "error", "message"}
   [DONE]
 응답이 끝나면 대화가 hub 저장소에 기록되고, 사용자 메모리(md)가 백그라운드로 갱신된다.
@@ -28,7 +29,7 @@ from pydantic import BaseModel
 
 import agent
 from db import user_store
-from hub import memory, service, skills, store, vision
+from hub import memory, service, skills, store, suggest, vision
 from hub.users import current_user
 from hub.routing import ToolSelection, resolve
 
@@ -84,6 +85,7 @@ async def chat(req: ChatRequest, user: dict = Depends(current_user)):
         trace: list[dict] = []
         plan = None
         attachments: list[dict] = []
+        suggestions: list[str] = []
         try:
             prepared = messages
             async for ev in vision.prepare(messages):  # 첨부 이미지 → VLM 해석 (진행은 tool 처럼 보인다)
@@ -112,6 +114,10 @@ async def chat(req: ChatRequest, user: dict = Depends(current_user)):
                 elif ev["type"] == "tool_end" and ev["id"] in runs:
                     runs[ev["id"]].update(ms=ev["ms"], ok=ev["ok"])
                 yield _sse(ev)
+            # 답변이 다 나간 뒤 — 화면은 이미 답을 보여주고 있고, 추천 칩만 뒤따라 붙는다
+            suggestions = await suggest.generate(user_text, "".join(text), plan.tools)
+            if suggestions:
+                yield _sse({"type": "suggestions", "items": suggestions})
         except Exception as e:  # noqa: BLE001
             log.exception("chat failed")
             yield _sse({"type": "error", "message": str(e)[:300]})
@@ -121,7 +127,7 @@ async def chat(req: ChatRequest, user: dict = Depends(current_user)):
                                   req.agent_id, req.skill_id, routed_agent=plan.agent_id if plan else None,
                                   routed_skill=plan.skill_id if plan else None,
                                   route=plan.summary() if plan else None, user_id=user["user_id"], trace=trace,
-                                  attachments=attachments)
+                                  attachments=attachments, suggestions=suggestions)
                 memory.schedule_update(user, user_text, "".join(text), list(runs.values()), date.today().isoformat())
         yield "data: [DONE]\n\n"
 

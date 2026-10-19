@@ -24,6 +24,11 @@ groups:
     description: 설비 공정 지표 Trend — 예시 MCP 서버의 Mock 데이터
     tools: [get_metric_trend]
 
+  - id: insp
+    name: INSP 검사 (예시)
+    description: Lot 의 INSP Wafer Map · defect 분포 · 패턴 — 예시 MCP 서버의 Mock 데이터
+    tools: [get_insp_map]
+
   - id: code
     name: 코드 실행
     description: Python 으로 계산 · 가공 · 자유 형식 차트 (mcp_servers/code_interpreter)
@@ -31,13 +36,14 @@ groups:
 
 # 화면 전용 tool — 카드 컴포넌트가 GET /api/ui/{tool} 로 부른다 (routers/ui.py). LLM 에는 절대 묶지 않는다.
 # 회사 MCP 로 옮길 때 같은 이름 · 인자 · JSON 모양으로 제공하면 화면도 그대로 붙는다.
-ui_tools: [ui_notices, ui_metric_trend, ui_artifact]
+ui_tools: [ui_notices, ui_metric_trend, ui_artifact, ui_insp_map]
 
 # tool 이름 → 화면 표시명 (없으면 tool 이름 그대로 보인다)
 tool_labels:
   get_current_time: 현재 시각
   search_notices: 공지 검색
   get_metric_trend: 지표 추이
+  get_insp_map: INSP Wafer Map
   run_python: Python 실행
 
 # include_imported: 화면에서 등록한 MCP 서버 group 을 허용 범위에 넣는다 (서버의 '기본으로 켜기' 면 기본 group 에도).
@@ -50,8 +56,8 @@ agents:
     description: 범용 업무 어시스턴트 — 조회 · 정리 · 분석
     route_hint: |
       일반적인 업무 질문, 데이터 조회, 여러 영역에 걸친 질문.
-    allowed_groups: [general, notice, metric, code]
-    default_groups: [general, notice, metric, code]
+    allowed_groups: [general, notice, metric, insp, code]
+    default_groups: [general, notice, metric, insp, code]
     include_imported: true   # 화면(MCP)에서 등록한 서버의 tool 도 쓸 수 있다
     prompt: |
       당신은 사내 업무 어시스턴트 'Coris' 입니다.

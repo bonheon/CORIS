@@ -5,6 +5,7 @@ export interface Message {
   role: "user" | "assistant";
   content: string;
   attachments?: Attachment[]; // 사용자 메시지의 첨부 이미지
+  suggestions?: string[];     // 답변 뒤 LLM 이 만든 추천 후속 질문
   at: string;              // ISO 시각
   streaming?: boolean;     // true 동안 마크다운 파싱 생략 (plain text)
   tools?: ToolRun[];       // 이 응답을 만들며 실행한 tool

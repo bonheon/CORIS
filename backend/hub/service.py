@@ -34,7 +34,7 @@ def save_turn(
     agent_id: str, skill_id: Optional[str], source: str = "chat", event_id: Optional[str] = None,
     routed_agent: Optional[str] = None, route: Optional[dict] = None, user_id: Optional[str] = None,
     trace: Optional[list[dict]] = None, routed_skill: Optional[str] = None,
-    attachments: Optional[list[dict]] = None,
+    attachments: Optional[list[dict]] = None, suggestions: Optional[list[str]] = None,
 ) -> dict:
     """agent_id · skill_id 는 사용자가 고른 값(auto · 없음 포함), routed_agent · routed_skill 은 실제로 적용된 값
     — 다음 턴 sticky routing 기준. routed_skill 은 workflow 가 끝나 skill 이 빠진 턴이면 지운다."""
@@ -50,7 +50,7 @@ def save_turn(
     conv["messages"] += [
         {"role": "user", "content": user_text, "at": ts} | ({"attachments": attachments} if attachments else {}),
         {"role": "assistant", "content": assistant_text, "tools": tools, "agent": routed_agent, "route": route,
-         "trace": trace or [], "at": ts},
+         "trace": trace or [], "at": ts} | ({"suggestions": suggestions} if suggestions else {}),
     ]
     conv.update(agent_id=agent_id, skill_id=skill_id, updated_at=ts, summary=summarize(assistant_text))
     if routed_agent:

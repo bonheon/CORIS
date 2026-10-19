@@ -13,11 +13,13 @@ import React from "react";
 import NoticeListCard from "./NoticeListCard";
 import ChartCard from "./ChartCard";
 import ArtifactCard from "./ArtifactCard";
+import WaferMapCard from "./WaferMapCard";
 
 export const CARDS: Record<string, (value: string) => React.ReactNode> = {
   NOTICE_LIST: (value) => <NoticeListCard keyword={value} />,
   CHART: (value) => <ChartCard value={value} />,
   ARTIFACT: (value) => <ArtifactCard id={value} />,
+  WAFER_MAP: (value) => <WaferMapCard lotId={value} />,
 };
 
 const TAG_RE = new RegExp(`\\[(${Object.keys(CARDS).join("|") || "(?!)"}):([^\\]]*)\\]`, "g");

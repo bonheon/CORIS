@@ -66,7 +66,7 @@ export interface ToolSelection { groups?: string[]; tools?: string[]; exclude?: 
 
 export interface StoredMessage {
   role: "user" | "assistant"; content: string; tools?: ToolRun[]; at: string;
-  agent?: string | null; route?: RouteInfo | null; attachments?: Attachment[];
+  agent?: string | null; route?: RouteInfo | null; attachments?: Attachment[]; suggestions?: string[];
 }
 export interface ConvHead {
   id: string; title: string; source: "chat" | "event"; event_id: string | null;
@@ -159,6 +159,7 @@ export interface ChatHandlers {
   onToolStart: (run: ToolRun & { id: string }) => void;
   onToolEnd: (id: string, ms: number, ok: boolean) => void;
   onError: (message: string) => void;
+  onSuggestions?: (items: string[]) => void;
 }
 
 export async function streamChat(body: ChatRequest, h: ChatHandlers, signal?: AbortSignal) {
@@ -193,6 +194,7 @@ export async function streamChat(body: ChatRequest, h: ChatHandlers, signal?: Ab
         case "tool_start": h.onToolStart({ id: ev.id, name: ev.name, args: ev.args, ms: null, ok: null }); break;
         case "tool_end": h.onToolEnd(ev.id, ev.ms, ev.ok); break;
         case "error": h.onError(ev.message); break;
+        case "suggestions": h.onSuggestions?.(ev.items ?? []); break;
       }
     }
   }

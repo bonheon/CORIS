@@ -16,6 +16,14 @@ get_metric_trend: |
   - 사용자가 이동평균 · 설비 간 차이 · 분포 · 다른 축 조합 등 기본 차트에 없는 형태를 원하면
     run_python 에서 df = load_ref("<data_ref 값>") 로 같은 데이터를 받아 직접 그린다
 
+get_insp_map: |
+  결과의 chart 값([WAFER_MAP:...])을 그대로 답변에 넣으면 Lot 전체 웨이퍼 맵 카드가 그려진다
+  (작은 맵 격자 · 클릭 확대 · defect 유형별 켜고 끄기 · 마우스를 올리면 좌표 · 크기).
+  - 숫자는 결과 값 그대로 쓴다. pattern 은 INSP 자동 분류 결과이므로 '자동 분류' 라고 밝힌다
+  - 맵 좌표로 추가 분석(반경별 분포, 웨이퍼 간 위치 겹침 등)이 필요하면
+    run_python 에서 load_ref("ui_insp_map?lot_id=<LOT>") — 이 데이터는 차트 형식이 아니라 dict 로 온다
+    (wafers[i].defects = [x_mm, y_mm, class index, size_um], classes = 유형 이름)
+
 run_python: |
   호출할 때마다 같은 대화의 Python 세션이 이어진다 (변수 · import 유지).
   - 데이터: load_ref("<다른 tool 결과의 data_ref>") → pandas DataFrame (x, series, value 열). 값을 코드에 직접 옮겨 적지 않는다

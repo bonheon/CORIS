@@ -26,7 +26,7 @@ def save_html(obj, title="차트"):
         if not obj.layout.height:
             obj.update_layout(height=460)
         html = obj.to_html(full_html=True, include_plotlyjs=False,
-                           config={"scrollZoom": True, "displaylogo": False, "responsive": True})
+                           config={"scrollZoom": False, "displaylogo": False, "responsive": True})  # 휠은 페이지 스크롤 — 확대는 드래그
         # plotly.js 는 Coris 화면이 제공한다 (사내망 — CDN 대신)
         html = html.replace("<head>", f'<head><script src="{_PLOTLY_SRC}"></script>', 1)
     elif hasattr(obj, "to_html"):

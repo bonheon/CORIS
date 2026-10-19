@@ -456,3 +456,32 @@ a { color: var(--green-ink); }
 .u-atts img { max-width: 220px; max-height: 160px; border-radius: 8px; display: block; background: #fff; }
 .ctx a.row { color: inherit; text-decoration: none; }
 .ctx a.row:hover .ell { color: var(--green-ink); }
+.follow { align-items: center; }
+.follow-k { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; font-weight: 600; color: var(--faint); margin-right: 2px; }
+
+/* ── INSP Wafer Map 카드 ─────────────────────────────────────── */
+.wm-classes { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 4px 0 12px; }
+.wm-class { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line); background: var(--panel); border-radius: 999px; padding: 3px 10px; font-size: 12px; color: var(--ink); }
+.wm-class i { width: 8px; height: 8px; border-radius: 50%; }
+.wm-class small { color: var(--faint); }
+.wm-class.off { opacity: .4; }
+.wm-legend { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--faint); }
+.wm-legend i { width: 10px; height: 10px; border-radius: 3px; border: 2px solid; margin-left: 6px; }
+.wm-legend i.over { border-color: var(--err); } .wm-legend i.pattern { border-color: var(--warn); }
+.wm-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+.wm-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; }
+.wm-thumb { border: 2px solid transparent; background: none; border-radius: 8px; padding: 2px 2px 3px; display: flex; flex-direction: column; align-items: center; }
+.wm-thumb svg { width: 100%; display: block; }
+.wm-thumb span { font-size: 10.5px; color: var(--faint); display: flex; gap: 4px; }
+.wm-thumb span b { color: var(--ink); }
+.wm-thumb:hover { background: var(--hover); }
+.wm-thumb.pattern { border-color: var(--warn); }
+.wm-thumb.over { border-color: var(--err); }
+.wm-thumb.on { background: var(--green-soft); outline: 2px solid var(--green); outline-offset: 1px; }
+.wm-wafer { fill: var(--sunken); stroke: var(--line-strong); stroke-width: 2; }
+.wm-notch { fill: var(--panel); }
+.wm-big { display: flex; flex-direction: column; gap: 6px; }
+.wm-big-h { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.wm-big-h span:not(.pill) { color: var(--sub); }
+.wm-big small { font-size: 11.5px; }
+@media (max-width: 900px) { .wm-body { grid-template-columns: 1fr; } }

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CalendarClock, Share2 } from "lucide-react";
+import { CalendarClock, Share2, Sparkles } from "lucide-react";
 import { api, Attachment, RouteInfo, streamChat, ToolRun, UserCtx } from "../api";
 import { Message } from "../types";
 import { useHub } from "../hub";
@@ -49,7 +49,7 @@ export default function ChatPage({ convId, navigate }: Props) {
         if (!alive) return;
         setAgentId(c.agent_id || "auto");
         setSkillId(c.skill_id);
-        setMessages(c.messages.map((m, i) => ({ id: `${c.id}-${i}`, role: m.role, content: m.content, at: m.at, tools: m.tools, route: m.route, attachments: m.attachments })));
+        setMessages(c.messages.map((m, i) => ({ id: `${c.id}-${i}`, role: m.role, content: m.content, at: m.at, tools: m.tools, route: m.route, attachments: m.attachments, suggestions: m.suggestions })));
       },
       () => alive && setLoadErr("대화를 불러오지 못했습니다"),
     );
@@ -58,7 +58,7 @@ export default function ChatPage({ convId, navigate }: Props) {
 
   useEffect(() => {
     bottom.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [messages]);
+  }, [messages, busy]);  // busy — 응답이 끝나고 추천 칩이 나타날 때도 내려간다
 
   const patchLast = (fn: (m: Message) => Message) =>
     setMessages((prev) => prev.map((m, i) => (i === prev.length - 1 ? fn(m) : m)));
@@ -98,6 +98,7 @@ export default function ChatPage({ convId, navigate }: Props) {
           onToolEnd: (id, ms, ok) =>
             patchLast((m) => ({ ...m, toolMark: m.content.length, tools: m.tools?.map((r) => (r.id === id ? { ...r, ms, ok } : r)) })),
           onError: (msg) => patchLast((m) => ({ ...m, error: `에이전트 오류: ${msg}` })),
+          onSuggestions: (items) => patchLast((m) => ({ ...m, suggestions: items })),
         },
         ctrl.signal,
       );
@@ -149,7 +150,10 @@ export default function ChatPage({ convId, navigate }: Props) {
   }, [convId, conversations, messages]);
 
   const lastAI = [...messages].reverse().find((m) => m.role === "assistant" && !m.streaming);
-  const followUps = !busy && lastAI && !lastAI.error ? getFollowUpSuggestions(lastAI.content).slice(0, 3) : [];
+  // LLM 추천이 있으면 그것을, 없으면(꺼짐 · 실패 · 옛 대화) 카드 태그 기반 고정 추천
+  const followUps = !busy && lastAI && !lastAI.error
+    ? (lastAI.suggestions?.length ? lastAI.suggestions : getFollowUpSuggestions(lastAI.content)).slice(0, 3)
+    : [];
 
   // 마지막 질문을 매일 아침 실행하는 이벤터로 등록 (비활성 상태로 만들고 이벤터 화면에서 확인)
   const scheduleDaily = useCallback(async () => {
@@ -210,7 +214,8 @@ export default function ChatPage({ convId, navigate }: Props) {
             {messages.map((m) => <MessageBubble key={m.id} message={m} />)}
             {followUps.length > 0 && (
               <div className="follow">
-                {followUps.map((q) => <button key={q} className="chip" onClick={() => send(q)}>{q}</button>)}
+                <span className="follow-k"><Sparkles size={12} />추천</span>
+                {followUps.map((q) => <button key={q} className="chip" onClick={() => send(q)} title="누르면 바로 질문합니다">{q}</button>)}
               </div>
             )}
             <div ref={bottom} />

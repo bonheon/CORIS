@@ -1,6 +1,6 @@
 // 공통 차트 카드 — [CHART:<ui tool>?<args>] 태그. 화면 전용 MCP tool 이 아래 형식(ChartSpec)을 돌려주면
 // 차트 종류마다 카드를 새로 만들 필요 없이 이 카드 하나로 그린다.
-//   휠: 확대 · 축소 / 드래그: 이동 / 하단 슬라이더: 구간 / 우측 상단: 영역 확대 · 초기화 · 이미지 저장
+//   Ctrl+휠: 확대 · 축소 (그냥 휠은 페이지 스크롤) / 드래그: 이동 / 하단 슬라이더: 구간 / 우측 상단: 영역 확대 · 초기화 · 이미지 저장
 import React, { useEffect, useMemo, useRef } from "react";
 import * as echarts from "echarts";
 import { useUiData } from "../../lib/hooks";
@@ -15,13 +15,19 @@ export interface ChartSpec {
 }
 
 const PALETTE = ["--c-blue", "--c-green", "--c-amber", "--c-purple", "--c-sky", "--c-red"];
+const FALLBACK = ["#3b82f6", "#22a06b", "#f59e0b", "#8b5cf6", "#0ea5e9", "#ef4444"];
 
-function cssVar(name: string) {
+/** 테마 팔레트 색 (카드들이 같은 색 순서를 쓰도록) */
+export function paletteColors(): string[] {
+  return PALETTE.map(cssVar).map((c, i) => c || FALLBACK[i]);
+}
+
+export function cssVar(name: string) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 }
 
 /** 테마(라이트 · 다크)가 바뀌면 다시 그리기 위한 값 */
-function useThemeKey() {
+export function useThemeKey() {
   const [key, setKey] = React.useState(() => document.documentElement.dataset.theme ?? "");
   useEffect(() => {
     const ob = new MutationObserver(() => setKey(document.documentElement.dataset.theme ?? ""));
@@ -33,7 +39,7 @@ function useThemeKey() {
 
 function toOption(spec: ChartSpec): echarts.EChartsOption {
   const ink = cssVar("--ink"), sub = cssVar("--sub"), line = cssVar("--line"), err = cssVar("--err") || "#d33";
-  const colors = PALETTE.map(cssVar).map((c, i) => c || ["#3b82f6", "#22a06b", "#f59e0b", "#8b5cf6", "#0ea5e9", "#ef4444"][i]);
+  const colors = paletteColors();
   const unit = spec.y.unit ? ` ${spec.y.unit}` : "";
   const category = spec.x.type === "category"
     ? Array.from(new Set(spec.series.flatMap((s) => s.data.map((p) => String(p[0])))))
@@ -54,7 +60,8 @@ function toOption(spec: ChartSpec): echarts.EChartsOption {
       feature: { dataZoom: { title: { zoom: "영역 확대", back: "되돌리기" } }, restore: { title: "초기화" }, saveAsImage: { title: "이미지 저장" } },
     },
     dataZoom: [
-      { type: "inside", xAxisIndex: 0, filterMode: "none" },
+      // 그냥 휠은 페이지 스크롤로 넘긴다 — 대화 중간의 차트에서 스크롤이 막히지 않게
+      { type: "inside", xAxisIndex: 0, filterMode: "none", zoomOnMouseWheel: "ctrl", moveOnMouseWheel: false },
       { type: "slider", xAxisIndex: 0, filterMode: "none", height: 20, bottom: 8, textStyle: { color: sub } },
     ],
     xAxis: {
@@ -88,10 +95,9 @@ function toOption(spec: ChartSpec): echarts.EChartsOption {
   };
 }
 
-function Chart({ spec }: { spec: ChartSpec }) {
+/** ECharts 한 개 — 크기 변화 추적 · 휠 처리(그냥 휠은 페이지 스크롤, Ctrl+휠만 차트) 공통 */
+export function EChart({ option, style }: { option: echarts.EChartsOption; style?: React.CSSProperties }) {
   const el = useRef<HTMLDivElement>(null);
-  const themeKey = useThemeKey();
-  const option = useMemo(() => toOption(spec), [spec, themeKey]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!el.current) return;
@@ -99,10 +105,21 @@ function Chart({ spec }: { spec: ChartSpec }) {
     chart.setOption(option);
     const ro = new ResizeObserver(() => chart.resize());
     ro.observe(el.current);
-    return () => { ro.disconnect(); chart.dispose(); };
+    // 그냥 휠은 ECharts 에 닿기 전에 막아 페이지 스크롤로 보낸다 (zoomOnMouseWheel: "ctrl" 만으로는
+    // ECharts 가 휠 이벤트를 삼켜 대화 중간의 차트에서 스크롤이 멈춘다). Ctrl+휠만 차트 확대로.
+    const root = el.current;
+    const onWheel = (e: WheelEvent) => { if (!e.ctrlKey) e.stopPropagation(); };
+    root.addEventListener("wheel", onWheel, { capture: true });
+    return () => { root.removeEventListener("wheel", onWheel, { capture: true }); ro.disconnect(); chart.dispose(); };
   }, [option]);
 
-  return <div ref={el} style={{ width: "100%", height: 380 }} />;
+  return <div ref={el} style={{ width: "100%", height: 380, ...style }} />;
+}
+
+function Chart({ spec }: { spec: ChartSpec }) {
+  const themeKey = useThemeKey();
+  const option = useMemo(() => toOption(spec), [spec, themeKey]);  // eslint-disable-line react-hooks/exhaustive-deps
+  return <EChart option={option} />;
 }
 
 export default function ChartCard({ value }: { value: string }) {
@@ -117,7 +134,7 @@ export default function ChartCard({ value }: { value: string }) {
       <div className="panel-h">
         <b>{data.title ?? "차트"}</b>
         {data.subtitle && <small>{data.subtitle}</small>}
-        <small style={{ marginLeft: "auto" }}>휠 확대 · 드래그 이동</small>
+        <small style={{ marginLeft: "auto" }}>Ctrl+휠 확대 · 드래그 이동</small>
       </div>
       <div className="panel-b" style={{ paddingTop: 4 }}><Chart spec={data} /></div>
     </div>

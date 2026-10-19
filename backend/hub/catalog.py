@@ -52,6 +52,28 @@ _STATIC_GROUPS, AGENTS, UI_TOOLS, _STATIC_LABELS, PORTALS = _load_catalog()
 AGENTS_BY_ID = {a["id"]: a for a in AGENTS}
 FALLBACK_AGENT = AGENTS[0]["id"]
 
+
+def reload_yaml() -> None:
+    """catalog.yaml · tool_guides.yaml 을 다시 읽는다 — 서버 재시작 없이 group · agent · 안내를 고칠 수 있게.
+    다른 모듈이 import 한 참조가 유효하도록 제자리에서 바꾼다. yaml 이 잘못됐으면 기존 값을 유지한다."""
+    global _STATIC_GROUPS, _STATIC_LABELS, FALLBACK_AGENT
+    try:
+        groups, agents, ui_tools, labels, portals = _load_catalog()
+        guides = yaml.safe_load(GUIDES_PATH.read_text(encoding="utf-8")) or {}
+    except Exception:  # noqa: BLE001
+        log.exception("catalog.yaml / tool_guides.yaml 다시 읽기 실패 — 기존 설정 유지")
+        return
+    _STATIC_GROUPS, _STATIC_LABELS = groups, labels
+    AGENTS[:] = agents
+    AGENTS_BY_ID.clear()
+    AGENTS_BY_ID.update({a["id"]: a for a in agents})
+    FALLBACK_AGENT = agents[0]["id"]
+    UI_TOOLS.clear()
+    UI_TOOLS.update(ui_tools)
+    PORTALS[:] = portals
+    TOOL_GUIDES.clear()
+    TOOL_GUIDES.update(guides)
+
 # 아래는 rebuild() 가 제자리에서 갱신한다 (yaml group + 화면에서 등록한 서버 group)
 GROUPS: list[dict] = []
 GROUPS_BY_ID: dict[str, dict] = {}
@@ -110,8 +132,9 @@ def _check_tools() -> None:
 
 
 async def refresh() -> dict:
-    """MCP 서버에서 tool 을 다시 받아온다. 서버가 전부 죽어 있어도 예외 없이 빈 목록으로 동작."""
+    """catalog.yaml 을 다시 읽고 MCP 서버에서 tool 을 다시 받아온다. 서버가 전부 죽어 있어도 예외 없이 빈 목록으로 동작."""
     global VERSION
+    reload_yaml()
     rebuild()
     tools = session_tools.wrap_all(await mcp_registry.load_tools(always_keep=UI_TOOLS))
     TOOLS_BY_NAME.clear()
