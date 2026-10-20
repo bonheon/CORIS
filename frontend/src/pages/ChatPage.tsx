@@ -5,6 +5,7 @@ import { Message } from "../types";
 import { useHub } from "../hub";
 import MessageBubble from "../components/MessageBubble";
 import Composer from "../shell/Composer";
+import ControlBar, { BarVariant } from "../shell/ControlBar";
 import ChatContext from "./ChatContext";
 import { getFollowUpSuggestions, STARTERS } from "../lib/suggestions";
 
@@ -23,6 +24,13 @@ export default function ChatPage({ convId, navigate }: Props) {
   const [skillId, setSkillId] = useState<string | null>(null);
   const [toolSel, setToolSel] = useState<string[]>([]);   // 비어 있으면 자동
   const [busy, setBusy] = useState(false);
+  const [barVariant, setBarVariant] = useState<BarVariant>(() => {
+    try { return localStorage.getItem("coris.barVariant") === "panel" ? "panel" : "chips"; } catch { return "chips"; }
+  });
+  const changeBarVariant = useCallback((v: BarVariant) => {
+    setBarVariant(v);
+    try { localStorage.setItem("coris.barVariant", v); } catch { /* 저장 못 해도 화면은 동작 */ }
+  }, []);
   const [loadErr, setLoadErr] = useState<string | null>(null);
 
   const idRef = useRef<string | null>(convId);     // 현재 대화 id (새 대화면 meta 이벤트로 채워짐)
@@ -188,6 +196,17 @@ export default function ChatPage({ convId, navigate }: Props) {
             </div>
           )}
         </header>
+
+        <ControlBar
+          variant={barVariant}
+          onVariantChange={changeBarVariant}
+          agentId={agentId}
+          skillId={skillId}
+          selectedTools={toolSel}
+          onAgentChange={changeAgent}
+          onSkillChange={setSkillId}
+          onToolsChange={setToolSel}
+        />
 
         <div className="scroll">
           <div className="inner">
