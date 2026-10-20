@@ -8,11 +8,9 @@ import "../styles/controlbar.css";
 //   selectedTools 가 비어 있으면 "자동": agent 기본 group 의 tool (자동 선택이면 모든 agent 기본 tool)
 //   스킬 필수 tool 은 항상 켜져 있고 끌 수 없다.
 
-export type BarVariant = "chips" | "panel";
+// 평소에는 요약 한 줄, 펼치면 에이전트 · 스킬 · Tool 3열 스위치 패널.
 
 interface Props {
-  variant: BarVariant;
-  onVariantChange: (v: BarVariant) => void;
   agentId: string;
   skillId: string | null;
   selectedTools: string[];
@@ -29,7 +27,7 @@ function Switch({ on, disabled, onClick }: { on: boolean; disabled?: boolean; on
   );
 }
 
-export default function ControlBar({ variant, onVariantChange, agentId, skillId, selectedTools, onAgentChange, onSkillChange, onToolsChange }: Props) {
+export default function ControlBar({ agentId, skillId, selectedTools, onAgentChange, onSkillChange, onToolsChange }: Props) {
   const { meta, skills } = useHub();
   const [open, setOpen] = useState(false);
 
@@ -69,63 +67,14 @@ export default function ControlBar({ variant, onVariantChange, agentId, skillId,
   const reset = () => { onToolsChange([]); onSkillChange(null); onAgentChange("auto"); };
   const dirty = manual || !!skill || !auto;
 
-  const switcher = (
-    <div className="cb-variant" title="화면 시안 비교용">
-      <button className={variant === "chips" ? "sel" : ""} onClick={() => onVariantChange("chips")}>시안 A</button>
-      <button className={variant === "panel" ? "sel" : ""} onClick={() => onVariantChange("panel")}>시안 B</button>
-    </div>
-  );
-
-  // ── 시안 A: 한 줄 칩 — 누를 때마다 켜고 끈다 ──
-  if (variant === "chips") {
-    return (
-      <div className="cb cb-chips">
-        <div className="cb-row">
-          <span className="cb-k"><Bot size={13} />에이전트</span>
-          <div className="seg">
-            {agents.map((a) => (
-              <button key={a.id} className={a.id === agentId ? "sel" : ""} onClick={() => onAgentChange(a.id)}>{a.name}</button>
-            ))}
-          </div>
-          <span className="cb-sep" />
-          <span className="cb-k"><Blocks size={13} />스킬</span>
-          {skills.length === 0 && <small className="cb-none">없음</small>}
-          {skills.map((s) => (
-            <button key={s.id} className={`tg ${s.id === skillId ? "on" : ""}`} onClick={() => onSkillChange(s.id === skillId ? null : s.id)}>
-              <i />{s.name}
-            </button>
-          ))}
-          <span className="cb-sep" />
-          <span className="cb-k"><Wrench size={13} />Tool <b>{manual ? "수동" : "자동"}</b></span>
-          {groups.flatMap((g) => g.tools).map((n) => {
-            const t = info.get(n);
-            const lock = locked.has(n);
-            return (
-              <button key={n} className={`tg ${isOn(n) ? "on" : ""} ${lock ? "lock" : ""}`} disabled={!lock && !usable(n)}
-                title={lock ? "스킬 필수 tool" : t?.description} onClick={() => setTools([n], !isOn(n))}>
-                {lock ? <Lock size={10} /> : <i />}{t?.label ?? n}
-              </button>
-            );
-          })}
-          <div className="cb-end">
-            {dirty && <button className="ghost" onClick={reset}><RotateCcw size={12} />초기화</button>}
-            {switcher}
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // ── 시안 B: 요약 한 줄 + 펼치면 3열 스위치 패널 ──
   return (
-    <div className={`cb cb-panel ${open ? "open" : ""}`}>
+    <div className={`cb ${open ? "open" : ""}`}>
       <div className="cb-sum" role="button" onClick={() => setOpen(!open)}>
         <span><Bot size={13} />에이전트 <b>{agent?.name ?? "자동 선택"}</b></span>
         <span><Blocks size={13} />스킬 <b>{skill?.name ?? "없음"}</b></span>
         <span><Wrench size={13} />Tool <b>{onCount}/{meta.tools.length} 켜짐</b>{!manual && <em>자동</em>}</span>
         <div className="cb-end" onClick={(e) => e.stopPropagation()}>
           {dirty && <button className="ghost" onClick={reset}><RotateCcw size={12} />초기화</button>}
-          {switcher}
           <button className="ib sm" onClick={() => setOpen(!open)} aria-label="펼치기">
             {open ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
           </button>

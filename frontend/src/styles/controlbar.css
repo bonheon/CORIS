@@ -4,11 +4,6 @@
 .cb-end { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .cb-none { color: var(--faint); }
 
-/* 시안 비교 토글 */
-.cb-variant { display: inline-flex; border: 1px dashed var(--line-strong); border-radius: 7px; padding: 2px; gap: 2px; }
-.cb-variant button { border: 0; background: none; color: var(--faint); font-size: 11px; padding: 2px 8px; border-radius: 5px; }
-.cb-variant button.sel { background: var(--sand); color: var(--ink); font-weight: 600; }
-
 /* 스위치 */
 .sw { flex-shrink: 0; width: 30px; height: 17px; border-radius: 9px; border: 0; padding: 0; background: var(--line-strong); position: relative; cursor: pointer; transition: background .15s; }
 .sw i { position: absolute; top: 2px; left: 2px; width: 13px; height: 13px; border-radius: 50%; background: var(--panel); box-shadow: 0 1px 2px rgba(0, 0, 0, .2); transition: left .15s; }
@@ -16,24 +11,7 @@
 .sw.on i { left: 15px; }
 .sw:disabled { opacity: .45; cursor: default; }
 
-/* ── 시안 A: 한 줄 칩 ── */
-.cb-chips { padding: 8px 24px; }
-.cb-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; row-gap: 6px; }
-.cb-k { display: inline-flex; align-items: center; gap: 4px; color: var(--sub); font-size: 12px; margin-right: 2px; white-space: nowrap; }
-.cb-k b { color: var(--ink); font-weight: 600; }
-.cb-sep { width: 1px; height: 18px; background: var(--line); margin: 0 6px; }
-.seg { display: inline-flex; background: var(--sunken); border: 1px solid var(--line); border-radius: 8px; padding: 2px; }
-.seg button { border: 0; background: none; color: var(--sub); font-size: 12px; padding: 3px 10px; border-radius: 6px; white-space: nowrap; }
-.seg button.sel { background: var(--panel); color: var(--ink); font-weight: 600; box-shadow: 0 1px 2px rgba(0, 0, 0, .08); }
-.tg { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--faint); font-size: 12px; padding: 3px 10px 3px 8px; border-radius: 999px; white-space: nowrap; }
-.tg i { width: 7px; height: 7px; border-radius: 50%; background: var(--line-strong); }
-.tg:hover:not(:disabled) { background: var(--hover); }
-.tg.on { color: var(--green-ink); border-color: color-mix(in srgb, var(--green) 40%, var(--line)); background: var(--green-soft); }
-.tg.on i { background: var(--green); }
-.tg.lock { cursor: default; }
-.tg:disabled:not(.lock) { opacity: .5; }
-
-/* ── 시안 B: 요약 + 펼침 패널 ── */
+/* 요약 한 줄 + 펼침 패널 */
 .cb-sum { display: flex; align-items: center; gap: 18px; padding: 8px 24px; cursor: pointer; min-height: 42px; }
 .cb-sum > span { display: inline-flex; align-items: center; gap: 5px; color: var(--sub); white-space: nowrap; }
 .cb-sum b { color: var(--ink); font-weight: 600; }
@@ -53,7 +31,7 @@
 .cb-t { padding: 5px 0 0 10px; color: var(--sub); }
 
 @media (max-width: 900px) {
-  .cb-chips, .cb-sum { padding-left: 16px; padding-right: 16px; }
+  .cb-sum { padding-left: 16px; padding-right: 16px; }
   .cb-cols { grid-template-columns: 1fr; padding: 4px 16px 14px; }
   .cb-sum { flex-wrap: wrap; gap: 10px; }
 }
