@@ -5,6 +5,7 @@ import { Message } from "../types";
 import { useHub } from "../hub";
 import MessageBubble from "../components/MessageBubble";
 import Composer from "../shell/Composer";
+import ControlBar from "../shell/ControlBar";
 import ChatContext from "./ChatContext";
 import { getFollowUpSuggestions, STARTERS } from "../lib/suggestions";
 
@@ -192,6 +193,15 @@ export default function ChatPage({ convId, navigate }: Props) {
             </div>
           )}
         </header>
+
+        <ControlBar
+          agentId={agentId}
+          skillId={skillId}
+          selectedTools={toolSel}
+          onAgentChange={changeAgent}
+          onSkillChange={setSkillId}
+          onToolsChange={setToolSel}
+        />
 
         <div className="scroll">
           <div className="inner">
