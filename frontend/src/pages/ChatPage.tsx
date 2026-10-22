@@ -6,7 +6,6 @@ import { useHub } from "../hub";
 import MessageBubble from "../components/MessageBubble";
 import Composer from "../shell/Composer";
 import ControlBar from "../shell/ControlBar";
-import ChatContext from "./ChatContext";
 import { getFollowUpSuggestions, STARTERS } from "../lib/suggestions";
 
 let seq = 0;
@@ -175,7 +174,6 @@ export default function ChatPage({ convId, navigate }: Props) {
   };
 
   return (
-    <>
       <section className="center">
         <header className="c-head">
           <b>{title}</b>
@@ -247,7 +245,5 @@ export default function ChatPage({ convId, navigate }: Props) {
         />
       </section>
 
-      <ChatContext messages={messages} route={lastRoute} agentId={agentId} skillId={skillId} hasConversation={!!convId} busy={busy} navigate={navigate} onSchedule={scheduleDaily} />
-    </>
   );
 }

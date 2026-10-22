@@ -126,7 +126,7 @@ export default function SkillsPage({ selected, navigate }: { selected?: string; 
                             return (
                               <label key={t.name} className={`tool ${on ? "sel" : ""}`}>
                                 <input type="checkbox" checked={on} onChange={() => toggleTool(t.name)} />
-                                <div><b>{t.label}</b><code>{t.name}</code><p>{t.description}</p></div>
+                                <div><b>{t.label}</b><code>{t.name}</code><p title={t.description}>{t.description}</p></div>
                               </label>
                             );
                           })}
