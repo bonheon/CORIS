@@ -5,7 +5,7 @@ export interface Agent {
   tools: string[];               // 허용 범위 (allowed_groups 의 tool 전체)
   allowed_groups: string[]; default_groups: string[];
 }
-export interface ToolGroup { id: string; name: string; description: string; tools: string[] }
+export interface ToolGroup { id: string; name: string; description: string; tools: string[]; tags?: string[]; imported?: boolean }
 export interface ToolInfo {
   name: string; label: string; category: string; description: string;
   group: string | null; available: boolean; server: string | null;
@@ -20,7 +20,7 @@ export interface McpServer {
 export interface McpServerConf {
   id: string; name: string; description: string; url: string; transport: string;
   headers: Record<string, string>;   // 값은 가려져서 온다 (그대로 보내면 기존 값 유지)
-  enabled: boolean; tools: string[]; labels: Record<string, string>; default_on: boolean;
+  enabled: boolean; tools: string[]; labels: Record<string, string>; default_on: boolean; tags?: string[];
   source: "yaml" | "hub"; status?: McpServer | null;
 }
 export type McpServerInput = Omit<McpServerConf, "source" | "status">;
@@ -31,6 +31,7 @@ export interface McpToolSpec {
 export interface Portal { id: string; name: string; description: string; status: "ok" | "warn" | "err"; note: string; url: string }
 export interface Meta {
   agents: Agent[]; groups: ToolGroup[]; tools: ToolInfo[]; portals: Portal[];
+  areas: string[];   // 업무 영역 (공정 · 장비 · 품질) — 대화 위 영역 탭
   mcp_servers: McpServer[];
 }
 
@@ -58,7 +59,7 @@ export interface User {
 }
 export interface UserMemory { user_id: string; content: string; version: number; updated_at: string; source: string }
 export interface MemoryVersion { version: number; source: string; created_at: string; chars?: number; content?: string }
-export interface Me { user: User; memory: UserMemory | null; memory_enabled: boolean; template: string }
+export interface Me { user: User; is_admin: boolean; memory: UserMemory | null; memory_enabled: boolean; template: string }
 /** 채팅 시작 시 백엔드가 불러온 사용자 · 메모리 */
 export interface UserCtx { user_id: string; name: string; memory_chars: number; memory_version: number }
 
@@ -70,16 +71,20 @@ export interface StoredMessage {
 }
 export interface ConvHead {
   id: string; title: string; source: "chat" | "event"; event_id: string | null;
-  agent_id: string; skill_id: string | null; summary: string;
+  agent_id: string; skill_id: string | null; skill_ids?: string[]; summary: string;
   created_at: string; updated_at: string; turns: number;
 }
 export interface Conversation extends Omit<ConvHead, "turns"> { messages: StoredMessage[] }
 
 export interface Skill {
   id: string; name: string; description: string; tools: string[]; instructions: string;
+  tags: string[];                       // 자유 입력 — 영역 탭 · 검색
+  visibility: "official" | "private";   // 공식(모두) | 내 스킬(만든 사람 · 관리자)
+  owner: string | null; owner_name: string;
   uses: number; created_at: string; updated_at: string;
 }
-export type SkillInput = Pick<Skill, "name" | "description" | "tools" | "instructions">;
+export type SkillVisibility = "official" | "private";
+export type SkillInput = Pick<Skill, "name" | "description" | "tools" | "instructions" | "tags"> & { visibility?: SkillVisibility };
 
 export interface Schedule { kind: "daily" | "weekly"; time: string; weekday: number | null }
 export interface LastRun {
@@ -133,6 +138,7 @@ export const api = {
   createSkill: (s: SkillInput) => req<Skill>("/api/hub/skills", json("POST", s)),
   updateSkill: (id: string, s: SkillInput) => req<Skill>(`/api/hub/skills/${id}`, json("PUT", s)),
   deleteSkill: (id: string) => req(`/api/hub/skills/${id}`, { method: "DELETE" }),
+  copySkill: (id: string) => req<Skill>(`/api/hub/skills/${id}/copy`, { method: "POST" }),
 
   events: () => req<HubEvent[]>("/api/hub/events"),
   createEvent: (e: EventInput) => req<HubEvent>("/api/hub/events", json("POST", e)),
@@ -148,7 +154,7 @@ export interface ChatRequest {
   messages: { role: "user" | "assistant"; content: string; attachments?: string[] }[];
   conversation_id: string | null;
   agent_id: string;
-  skill_id: string | null;
+  skill_ids: string[];           // 켜 둔 스킬 — 1개면 그 절차, 2개 이상이면 질문마다 맞는 것
   tool_selection?: ToolSelection | null;
 }
 export interface ChatHandlers {

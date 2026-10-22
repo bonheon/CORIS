@@ -47,7 +47,8 @@ class ChatRequest(BaseModel):
     messages: list[Message]
     conversation_id: Optional[str] = None
     agent_id: str = "auto"
-    skill_id: Optional[str] = None
+    skill_id: Optional[str] = None      # 예전 형식 — skill_ids 가 없을 때만
+    skill_ids: list[str] = []           # 켜 둔 스킬: 1개면 그 절차로, 2개 이상이면 질문마다 그중 맞는 것
     tool_selection: Optional[ToolSelection] = None
 
 
@@ -72,7 +73,11 @@ async def chat(req: ChatRequest, user: dict = Depends(current_user)):
     prev_agent = conv.get("routed_agent") if conv else None
     prev_skill = conv.get("routed_skill") if conv else None
     messages = _attach_traces(messages, conv)
-    skill = skills.get_item(req.skill_id)
+    # 사용자에게 보이는 스킬만 — 남의 '내 스킬' id 를 넣어도 쓰이지 않는다
+    visible = {s["id"]: s for s in skills.list_items(user["user_id"], user["is_admin"])}
+    picked = [visible[i] for i in dict.fromkeys(req.skill_ids or ([req.skill_id] if req.skill_id else [])) if i in visible]
+    skill = picked[0] if len(picked) == 1 else None
+    skill_pool = picked if len(picked) > 1 else list(visible.values())
     mem = user_store.get_memory(user["user_id"])
 
     async def generate():
@@ -97,7 +102,8 @@ async def chat(req: ChatRequest, user: dict = Depends(current_user)):
                 elif ev["type"] == "tool_end" and ev["id"] in runs:
                     runs[ev["id"]].update(ms=ev["ms"], ok=ev["ok"])
                 yield _sse(ev)
-            plan = await resolve(prepared, req.agent_id, skill, req.tool_selection, prev_agent, prev_skill)
+            plan = await resolve(prepared, req.agent_id, skill, req.tool_selection, prev_agent, prev_skill,
+                                 skill_pool=skill_pool, pool_explicit=len(picked) > 1)
             yield _sse(plan.event())
             applied = skill or skills.get_item(plan.skill_id)  # Router 가 고른 skill 포함
             async for ev in agent.stream(prepared, plan, applied, memory.for_prompt(mem["content"] if mem else None),
@@ -124,10 +130,10 @@ async def chat(req: ChatRequest, user: dict = Depends(current_user)):
         finally:
             if text or runs:
                 service.save_turn(conv_id, user_text, "".join(text), list(runs.values()),
-                                  req.agent_id, req.skill_id, routed_agent=plan.agent_id if plan else None,
+                                  req.agent_id, skill["id"] if skill else None, routed_agent=plan.agent_id if plan else None,
                                   routed_skill=plan.skill_id if plan else None,
                                   route=plan.summary() if plan else None, user_id=user["user_id"], trace=trace,
-                                  attachments=attachments, suggestions=suggestions)
+                                  attachments=attachments, suggestions=suggestions, skill_ids=[s["id"] for s in picked])
                 memory.schedule_update(user, user_text, "".join(text), list(runs.values()), date.today().isoformat())
         yield "data: [DONE]\n\n"
 

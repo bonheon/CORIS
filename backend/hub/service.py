@@ -35,6 +35,7 @@ def save_turn(
     routed_agent: Optional[str] = None, route: Optional[dict] = None, user_id: Optional[str] = None,
     trace: Optional[list[dict]] = None, routed_skill: Optional[str] = None,
     attachments: Optional[list[dict]] = None, suggestions: Optional[list[str]] = None,
+    skill_ids: Optional[list[str]] = None,
 ) -> dict:
     """agent_id · skill_id 는 사용자가 고른 값(auto · 없음 포함), routed_agent · routed_skill 은 실제로 적용된 값
     — 다음 턴 sticky routing 기준. routed_skill 은 workflow 가 끝나 skill 이 빠진 턴이면 지운다."""
@@ -53,6 +54,8 @@ def save_turn(
          "trace": trace or [], "at": ts} | ({"suggestions": suggestions} if suggestions else {}),
     ]
     conv.update(agent_id=agent_id, skill_id=skill_id, updated_at=ts, summary=summarize(assistant_text))
+    if skill_ids is not None:
+        conv["skill_ids"] = skill_ids  # 화면의 스킬 칩 상태 — 대화를 다시 열 때 복원
     if routed_agent:
         conv["routed_agent"] = routed_agent
         conv["routed_skill"] = routed_skill

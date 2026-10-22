@@ -8,30 +8,39 @@
 # tool 이름은 MCP 서버(mcp_servers.yaml)가 내려주는 이름과 같아야 한다.
 # 로드 시 검증해서 모르는 이름은 경고만 남기고 "사용 불가" 로 취급한다.
 
+# 업무 영역 — 대화 위 영역 탭. group 의 tags 에 영역 이름이 있으면 그 탭에서 켜진다.
+# '공통' 태그 group 은 모든 탭에서 켜진다. 영역 · 태그는 자유롭게 늘려도 된다.
+areas: [공정, 장비, 품질]
+
 groups:
   - id: general
     name: 기본
     description: 시각 등 공통 유틸리티
+    tags: [공통]
     tools: [get_current_time]
 
   - id: notice
     name: 공지 (예시)
     description: 사내 공지 검색 — 예시 MCP 서버(mcp_servers/example)
+    tags: [공통]
     tools: [search_notices]
 
   - id: metric
     name: 지표 추이 (예시)
     description: 설비 공정 지표 Trend — 예시 MCP 서버의 Mock 데이터
+    tags: [장비, 공정]
     tools: [get_metric_trend]
 
   - id: insp
     name: INSP 검사 (예시)
     description: Lot 의 INSP Wafer Map · defect 분포 · 패턴 — 예시 MCP 서버의 Mock 데이터
+    tags: [품질, 공정]
     tools: [get_insp_map]
 
   - id: code
     name: 코드 실행
     description: Python 으로 계산 · 가공 · 자유 형식 차트 (mcp_servers/code_interpreter)
+    tags: [공통]
     tools: [run_python]
 
 # 화면 전용 tool — 카드 컴포넌트가 GET /api/ui/{tool} 로 부른다 (routers/ui.py). LLM 에는 절대 묶지 않는다.

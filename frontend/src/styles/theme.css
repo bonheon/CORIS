@@ -480,3 +480,16 @@ a { color: var(--green-ink); }
 .wm-big-h span:not(.pill) { color: var(--sub); }
 .wm-big small { font-size: 11.5px; }
 @media (max-width: 900px) { .wm-body { grid-template-columns: 1fr; } }
+
+/* ── 스킬 화면: 필터 · 태그 ─────────────────────────────────── */
+.sk-filter { margin: 10px 10px 4px; display: flex; }
+.sk-filter button { flex: 1; }
+.sk-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 4px; }
+.sk-tag { font-size: 10.5px; background: var(--sand); color: var(--sub); border-radius: 4px; padding: 0 5px; }
+.tag-input { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; min-height: 36px; border: 1px solid var(--line-strong); border-radius: 8px; padding: 4px 8px; background: var(--panel); }
+.tag-input:focus-within { border-color: var(--green); box-shadow: 0 0 0 3px var(--green-soft); }
+.tag-input.off { background: var(--sunken); }
+.tag-input input { flex: 1; min-width: 140px; border: 0; outline: none; background: none; font-size: 13px; color: var(--ink); padding: 3px 2px; }
+.tag-input .tag button { border: 0; background: none; color: inherit; padding: 0; margin-left: 2px; display: grid; place-items: center; }
+.input:disabled, .textarea:disabled { background: var(--sunken); color: var(--sub); }
+.textarea.sk-instr { min-height: 380px; font-size: 13px; line-height: 1.65; }

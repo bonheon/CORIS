@@ -117,8 +117,11 @@ def get_metric_trend(metric: Metric, days: int = 30, equipment: str = "") -> str
     Args:
         metric: thickness(막 두께) | temperature(챔버 온도) | pressure(챔버 압력)
         days: 조회 기간(일), 1~90
-        equipment: 설비 ID (EQ-01 · EQ-02 · EQ-03). 비우면 전체
+        equipment: 설비 ID 하나 (EQ-01 · EQ-02 · EQ-03). 비우면 전체. 여러 대는 설비마다 따로 호출
     """
+    if equipment and equipment not in EQUIPMENTS:
+        # 모르는 값을 '전체' 로 처리하면 잘못된 호출이 우연히 맞아 보인다 — 분명히 거부한다
+        return _dump({"error": f"알 수 없는 설비 ID: {equipment!r}. 설비 ID 하나만 넣으세요 ({', '.join(EQUIPMENTS)}). 여러 대면 설비마다 따로 호출합니다."})
     days = max(1, min(int(days), 90))
     name, unit, _, _, lcl, ucl = METRICS[metric]
     rows = _trend_rows(metric, days, equipment)
@@ -183,6 +186,7 @@ def _insp_wafers(lot_id: str) -> list[dict]:
                 defects.append((cx + w.gauss(0, 7), cy + w.gauss(0, 7), w.choices(["PARTICLE", "BRIDGE"], [50, 50])[0]))
         wafers.append({
             "slot": slot, "pattern": pattern,
+            "eq_id": EQUIPMENTS[(slot - 1) % len(EQUIPMENTS)],  # 직전 공정 설비 (Mock: slot 순서로 배분)
             "defects": [(round(x, 1), round(y, 1), c, round(w.lognormvariate(-0.6, 0.5), 2)) for x, y, c in defects],
         })
     return wafers
@@ -190,7 +194,7 @@ def _insp_wafers(lot_id: str) -> list[dict]:
 
 @mcp.tool(structured_output=False)
 def get_insp_map(lot_id: str) -> str:
-    """Lot 의 INSP(검사) Wafer Map 결과를 조회한다 (Mock). 웨이퍼별 defect 수 · 유형 · 자동 분류 패턴과 Lot 요약을 돌려준다.
+    """Lot 의 INSP(검사) Wafer Map 결과를 조회한다 (Mock). 웨이퍼별 defect 수 · 유형 · 자동 분류 패턴 · 직전 공정 설비(eq_id)와 Lot 요약을 돌려준다.
 
     언제 사용: 특정 Lot 의 검사 결과, 웨이퍼 맵, defect 분포 · 패턴, 이상 웨이퍼를 묻는 질문.
 
@@ -205,7 +209,7 @@ def get_insp_map(lot_id: str) -> str:
         for *_, c, _s in w["defects"]:
             counts[c] += 1
         top = sorted(((c, n) for c, n in counts.items() if n), key=lambda t: -t[1])[:2]
-        rows.append({"slot": w["slot"], "total": len(w["defects"]), "pattern": w["pattern"],
+        rows.append({"slot": w["slot"], "eq_id": w["eq_id"], "total": len(w["defects"]), "pattern": w["pattern"],
                      "top_classes": [f"{c} {n}" for c, n in top],
                      "over_limit": len(w["defects"]) > DEFECT_LIMIT})
     totals = [r["total"] for r in rows]
@@ -253,7 +257,7 @@ def ui_insp_map(lot_id: str) -> str:
         "lot_id": lot, "step": "INSP-01", "wafer_diameter_mm": WAFER_R * 2, "limit_per_wafer": DEFECT_LIMIT,
         "classes": DEFECT_CLASSES,
         # defects: [x, y, class index, size(um)] — 25장 × 수백 점이라 키 없이 배열로
-        "wafers": [{"slot": w["slot"], "pattern": w["pattern"], "total": len(w["defects"]),
+        "wafers": [{"slot": w["slot"], "eq_id": w["eq_id"], "pattern": w["pattern"], "total": len(w["defects"]),
                     "defects": [[x, y, DEFECT_CLASSES.index(c), sz] for x, y, c, sz in w["defects"]]}
                    for w in _insp_wafers(lot)],
     })

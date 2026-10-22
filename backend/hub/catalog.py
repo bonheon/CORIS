@@ -28,9 +28,12 @@ AUTO = "auto"
 TOOLS_BY_NAME: dict = {}
 VERSION = 0  # refresh 마다 증가 — agent 그래프 캐시 키에 포함해 낡은 tool 객체를 버린다
 
-def _load_catalog() -> tuple[list[dict], list[dict], set[str], dict[str, str], list[dict]]:
+def _load_catalog() -> tuple[list[dict], list[dict], set[str], dict[str, str], list[dict], list[str]]:
     raw = yaml.safe_load(CATALOG_PATH.read_text(encoding="utf-8"))
     groups, agents, ui_tools = raw["groups"], raw["agents"], set(raw.get("ui_tools") or [])
+    areas = [str(a) for a in raw.get("areas") or []]
+    for g in groups:
+        g["tags"] = [str(t) for t in g.get("tags") or []]
     labels, portals = raw.get("tool_labels") or {}, raw.get("portals") or []
     group_ids = {g["id"] for g in groups}
     reserved = [gid for gid in group_ids if gid.startswith(mcp_store.GROUP_PREFIX)]
@@ -45,10 +48,10 @@ def _load_catalog() -> tuple[list[dict], list[dict], set[str], dict[str, str], l
     in_group = {n for g in groups for n in g["tools"]} & ui_tools
     if in_group:
         raise ValueError(f"화면 전용 tool 은 group 에 넣을 수 없음 (LLM 에 묶이면 안 됨): {', '.join(sorted(in_group))}")
-    return groups, agents, ui_tools, labels, portals
+    return groups, agents, ui_tools, labels, portals, areas
 
 
-_STATIC_GROUPS, AGENTS, UI_TOOLS, _STATIC_LABELS, PORTALS = _load_catalog()
+_STATIC_GROUPS, AGENTS, UI_TOOLS, _STATIC_LABELS, PORTALS, AREAS = _load_catalog()
 AGENTS_BY_ID = {a["id"]: a for a in AGENTS}
 FALLBACK_AGENT = AGENTS[0]["id"]
 
@@ -58,7 +61,7 @@ def reload_yaml() -> None:
     다른 모듈이 import 한 참조가 유효하도록 제자리에서 바꾼다. yaml 이 잘못됐으면 기존 값을 유지한다."""
     global _STATIC_GROUPS, _STATIC_LABELS, FALLBACK_AGENT
     try:
-        groups, agents, ui_tools, labels, portals = _load_catalog()
+        groups, agents, ui_tools, labels, portals, areas = _load_catalog()
         guides = yaml.safe_load(GUIDES_PATH.read_text(encoding="utf-8")) or {}
     except Exception:  # noqa: BLE001
         log.exception("catalog.yaml / tool_guides.yaml 다시 읽기 실패 — 기존 설정 유지")
@@ -71,6 +74,7 @@ def reload_yaml() -> None:
     UI_TOOLS.clear()
     UI_TOOLS.update(ui_tools)
     PORTALS[:] = portals
+    AREAS[:] = areas
     TOOL_GUIDES.clear()
     TOOL_GUIDES.update(guides)
 
@@ -85,6 +89,7 @@ _GROUP_OF: dict[str, str] = {}     # tool → 소속 group (화면 분류용, �
 def _imported_groups() -> list[dict]:
     return [
         {"id": mcp_store.group_id(s["id"]), "name": s["name"], "description": s.get("description") or s["url"],
+         "tags": [str(t) for t in s.get("tags") or []],
          "tools": [n for n in s.get("tools") or [] if n not in UI_TOOLS],
          "imported": True, "default_on": s.get("default_on", True)}
         for s in mcp_store.list_items() if s.get("enabled", True)
@@ -210,5 +215,6 @@ async def meta() -> dict:
         "groups": GROUPS,
         "tools": [tool_info(n) for n in names],
         "portals": PORTALS,
+        "areas": AREAS,
         "mcp_servers": mcp_registry.status(),
     }

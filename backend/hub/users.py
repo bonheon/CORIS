@@ -56,6 +56,15 @@ async def _fetch_profile(user_id: str) -> Optional[dict]:
     return data
 
 
+def admin_ids() -> set[str]:
+    """전략 관리자 사번 — .env ADMIN_USERS (쉼표 구분). 모든 스킬을 보고 편집 · 공식 지정 · MCP 서버 관리."""
+    return {x.strip() for x in os.getenv("ADMIN_USERS", "2057197").split(",") if x.strip()}
+
+
+def is_admin(user_id: str) -> bool:
+    return user_id in admin_ids()
+
+
 async def current_user(request: Request) -> dict:
     """FastAPI dependency — {user_id, name, dept, email, profile, ...}"""
     user_id = _header(request, ID_HEADER) or os.getenv("DEV_USER_ID", "dev.user")
@@ -68,4 +77,4 @@ async def current_user(request: Request) -> dict:
         name = profile.get("name") or name
         dept = profile.get("dept") or dept
         email = profile.get("email") or ""
-    return user_store.upsert_user(user_id, name, dept, email, profile)
+    return user_store.upsert_user(user_id, name, dept, email, profile) | {"is_admin": is_admin(user_id)}

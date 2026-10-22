@@ -17,6 +17,8 @@ interface Props {
   onToolsChange: (tools: string[]) => void;
   placeholder?: string;
   autoFocus?: boolean;
+  /** false 면 에이전트 · 스킬 · Tool 메뉴를 숨긴다 (대화 화면은 위 QuickBar 에서 고른다). / 스킬 호출은 그대로 */
+  showOptions?: boolean;
 }
 
 // 첨부 중인 이미지 — 고르는 즉시 업로드하고, 끝나면 att 가 채워진다
@@ -42,7 +44,7 @@ function imageName(f: File) {
 }
 
 // 입력 상태를 여기 가둬서 타이핑이 메시지 목록을 다시 그리지 않게 한다
-function Composer({ onSend, onStop, busy, agentId, skillId, onAgentChange, onSkillChange, selectedTools, onToolsChange, placeholder, autoFocus }: Props) {
+function Composer({ onSend, onStop, busy, agentId, skillId, onAgentChange, onSkillChange, selectedTools, onToolsChange, placeholder, autoFocus, showOptions = true }: Props) {
   const { meta, skills } = useHub();
   const [text, setText] = useState("");
   const [menu, setMenu] = useState<"agent" | "skill" | "tools" | null>(null);
@@ -181,7 +183,8 @@ function Composer({ onSend, onStop, busy, agentId, skillId, onAgentChange, onSki
           onKeyDown={onKey}
           placeholder={placeholder ?? "질문을 입력하세요.  / 로 스킬 · Ctrl+V 로 캡처 이미지 첨부"}
         />
-        <div className="bar">
+        <div className={`bar ${showOptions ? "" : "bare"}`}>
+          {showOptions && (<>
           <div style={{ position: "relative" }}>
             <button className="opt" onClick={() => setMenu(menu === "agent" ? null : "agent")}>
               에이전트 <b>{agent?.name ?? "자동 선택"}</b>
@@ -231,6 +234,7 @@ function Composer({ onSend, onStop, busy, agentId, skillId, onAgentChange, onSki
               </div>
             )}
           </div>
+          </>)}
           <input ref={fileInput} type="file" accept="image/*" multiple hidden
             onChange={(e) => { addFiles(Array.from(e.target.files ?? [])); e.target.value = ""; }} />
           <button className="opt" onClick={() => fileInput.current?.click()} title="이미지 첨부 (Ctrl+V 로 캡처 붙여넣기 가능)">

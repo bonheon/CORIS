@@ -132,6 +132,7 @@ export default function HomePage({ navigate }: { navigate: (p: string) => void }
         onSkillChange={setSkillId}
         selectedTools={tools}
         onToolsChange={setTools}
+        showOptions={false}
         placeholder="무엇이든 질문하세요.  / 로 스킬 불러오기"
       />
     </section>

@@ -7,6 +7,10 @@ Skill 저장소 — skill 하나 = 폴더 하나 = skills/<id>/SKILL.md (ceeria 
     description: |
       언제 쓰는 skill 인지 — Router 판단 근거
     tools: [get_daily_report, ...]   # MCP tool 이름 — 이 skill 의 필수 tool
+    tags: [공정, Lot 기준]            # 자유 입력 — 화면의 영역 탭 · 검색에 쓰인다 (여러 개 가능)
+    visibility: official             # official(모두에게 보임) | private(만든 사람 · 관리자만)
+    owner: "2057197"                 # 만든 사람 사번 (official 이면 없어도 된다)
+    owner_name: 홍길동
     ---
 
     # 절차 본문 — 그대로 프롬프트에 들어간다
@@ -15,8 +19,11 @@ Skill 저장소 — skill 하나 = 폴더 하나 = skills/<id>/SKILL.md (ceeria 
 사용 횟수 · 생성 시각처럼 실행하면서 바뀌는 값은 파일이 아니라 store 의 skill_stats 에 둔다
 (파일을 매 실행마다 고쳐 쓰지 않도록).
 
-API 로 나가는 모양은 예전 hub.json skill 과 같다:
-    {id, name, description, tools, instructions, uses, created_at, updated_at, path}
+API 로 나가는 모양:
+    {id, name, description, tools, tags, visibility, owner, owner_name, instructions, uses, created_at, updated_at, path}
+
+공개 범위: 내 스킬(private)은 만든 사람만, 관리자(hub/users.is_admin)는 전부 본다. 공식(official)은 모두.
+owner 가 없는 예전 파일은 공식으로 본다 — 저장소에 직접 넣은 스킬 = 전략팀이 배포한 스킬.
 """
 import logging
 import os
@@ -49,8 +56,29 @@ def _split(text: str, path: Path) -> tuple[dict, str]:
     return yaml.safe_load(head) or {}, body.lstrip("-").lstrip("\n")
 
 
-def _render(skill_id: str, name: str, description: str, tools: list[str], instructions: str) -> str:
-    meta = {"name": skill_id, "title": name, "description": description.strip(), "tools": list(tools)}
+OFFICIAL, PRIVATE = "official", "private"
+# 화면에서 편집하는 키. 그 밖의 키(sop · inputs · steps 등 SOP 스킬 구조)는 extra 로 보존한다 —
+# 화면에서 저장해도 지워지지 않게.
+_KNOWN = {"name", "title", "description", "tools", "tags", "visibility", "owner", "owner_name"}
+
+
+def clean_tags(tags) -> list[str]:
+    out: list[str] = []
+    for t in tags or []:
+        t = " ".join(str(t).split())[:30]
+        if t and t not in out:
+            out.append(t)
+    return out[:12]
+
+
+def _render(skill_id: str, name: str, description: str, tools: list[str], instructions: str,
+            tags: list[str], visibility: str, owner: Optional[str], owner_name: Optional[str],
+            extra: Optional[dict] = None) -> str:
+    meta = {"name": skill_id, "title": name, "description": description.strip(), "tools": list(tools),
+            "tags": clean_tags(tags), "visibility": visibility}
+    if owner:
+        meta |= {"owner": owner, "owner_name": owner_name or owner}
+    meta |= {k: v for k, v in (extra or {}).items() if k not in _KNOWN}
     head = yaml.safe_dump(meta, allow_unicode=True, sort_keys=False, default_flow_style=False)
     return f"---\n{head}---\n\n{instructions.strip()}\n"
 
@@ -68,11 +96,17 @@ def _load(path: Path) -> Optional[dict]:
         return None
     st = _stats(skill_id)
     updated = datetime.fromtimestamp(path.stat().st_mtime).isoformat(timespec="seconds")
+    owner = str(meta["owner"]) if meta.get("owner") else None
     return {
         "id": skill_id,
         "name": str(meta.get("title") or meta.get("name") or skill_id),
         "description": str(meta.get("description") or "").strip(),
         "tools": [str(t) for t in meta.get("tools") or []],
+        "tags": clean_tags(meta.get("tags")),
+        "visibility": PRIVATE if meta.get("visibility") == PRIVATE else OFFICIAL,
+        "owner": owner,
+        "owner_name": str(meta.get("owner_name") or owner or ""),
+        "extra": {k: v for k, v in meta.items() if k not in _KNOWN},
         "instructions": body.strip(),
         "uses": st.get("uses", 0),
         "created_at": st.get("created_at") or updated,
@@ -87,10 +121,22 @@ def _path(skill_id: str) -> Path:
 
 # ── 조회 · 저장 (store 와 같은 이름) ─────────────────────────────
 
-def list_items() -> list[dict]:
+def visible(skill: dict, user_id: Optional[str], admin: bool) -> bool:
+    return admin or skill["visibility"] == OFFICIAL or (user_id is not None and skill["owner"] == user_id)
+
+
+def can_edit(skill: dict, user_id: str, admin: bool) -> bool:
+    """공식 스킬은 관리자만, 내 스킬은 만든 사람 · 관리자."""
+    return admin or (skill["visibility"] == PRIVATE and skill["owner"] == user_id)
+
+
+def list_items(user_id: Optional[str] = None, admin: bool = True) -> list[dict]:
+    """user_id 를 주면 그 사용자가 볼 수 있는 것만 (기본값은 전체 — 내부 · 이벤터용)."""
     if not SKILLS_DIR.exists():
         return []
     skills = [s for p in sorted(SKILLS_DIR.glob("*/SKILL.md")) if (s := _load(p))]
+    if user_id is not None:
+        skills = [s for s in skills if visible(s, user_id, admin)]
     return sorted(skills, key=lambda s: s["updated_at"], reverse=True)
 
 
@@ -101,16 +147,25 @@ def get_item(skill_id: Optional[str]) -> Optional[dict]:
     return _load(path) if path.exists() else None
 
 
-def save(skill_id: Optional[str], name: str, description: str, tools: list[str], instructions: str) -> dict:
-    """skill_id 가 없으면 새로 만든다."""
+def save(skill_id: Optional[str], name: str, description: str, tools: list[str], instructions: str,
+         tags: Optional[list[str]] = None, visibility: Optional[str] = None,
+         owner: Optional[str] = None, owner_name: Optional[str] = None, extra: Optional[dict] = None) -> dict:
+    """skill_id 가 없으면 새로 만든다. 고칠 때 넘기지 않은 값(tags · visibility · owner)은 기존 값을 유지한다."""
     with _lock:
         new = skill_id is None
         skill_id = skill_id or store.new_id("sk")
         if not _ID_RE.match(skill_id):
             raise ValueError(f"잘못된 skill id: {skill_id}")
+        old = None if new else get_item(skill_id)
+        extra = old["extra"] if old else extra
+        if old:
+            tags = old["tags"] if tags is None else tags
+            visibility = visibility or old["visibility"]
+            owner, owner_name = old["owner"] or owner, old["owner_name"] or owner_name
         path = _path(skill_id)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(_render(skill_id, name, description, tools, instructions), encoding="utf-8")
+        path.write_text(_render(skill_id, name, description, tools, instructions, tags or [],
+                                visibility or OFFICIAL, owner, owner_name, extra), encoding="utf-8")
         if new:
             store.upsert_item("skill_stats", {"id": skill_id, "uses": 0, "created_at": store.now_iso()})
     return get_item(skill_id)

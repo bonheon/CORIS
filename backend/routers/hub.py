@@ -63,6 +63,7 @@ class McpServerIn(McpConn):
     tools: list[str] = []
     labels: dict[str, str] = {}
     default_on: bool = True
+    tags: list[str] = []       # 업무 영역 태그 (공정 · 장비 · 품질 · 공통 등) — 대화 위 영역 탭
 
 
 class McpServerCreate(McpServerIn):
@@ -198,7 +199,8 @@ class MemoryIn(BaseModel):
 @router.get("/me")
 def get_me(user: dict = Depends(current_user)):
     m = user_store.get_memory(user["user_id"])
-    return {"user": user, "memory": m, "memory_enabled": memory.ENABLED, "template": memory.template(user)}
+    return {"user": user, "is_admin": user["is_admin"], "memory": m, "memory_enabled": memory.ENABLED,
+            "template": memory.template(user)}
 
 
 @router.put("/me/memory")
@@ -262,6 +264,8 @@ class SkillIn(BaseModel):
     description: str = ""
     tools: list[str] = []
     instructions: str = ""
+    tags: list[str] = []
+    visibility: Optional[str] = Field(default=None, pattern="^(official|private)$")  # 공식 지정은 관리자만
 
 
 def _check_tools(names: list[str]) -> list[str]:
@@ -273,26 +277,56 @@ def _check_tools(names: list[str]) -> list[str]:
     return names
 
 
+def _skill_for(skill_id: str, user: dict, edit: bool = False) -> dict:
+    skill = _or_404(skills.get_item(skill_id), "skill")
+    if not skills.visible(skill, user["user_id"], user["is_admin"]):
+        raise HTTPException(404, "skill not found")  # 남의 내 스킬은 있는지도 알리지 않는다
+    if edit and not skills.can_edit(skill, user["user_id"], user["is_admin"]):
+        raise HTTPException(403, "공식 스킬은 관리자만 고칠 수 있습니다 — '복제해서 내 스킬로' 를 쓰세요")
+    return skill
+
+
+def _visibility(body: SkillIn, user: dict, default: str) -> str:
+    if body.visibility == skills.OFFICIAL and not user["is_admin"]:
+        raise HTTPException(403, "공식 스킬 지정은 관리자만 할 수 있습니다")
+    return body.visibility or default
+
+
 @router.get("/skills")
-def list_skills():
-    return skills.list_items()
+def list_skills(user: dict = Depends(current_user)):
+    """내가 볼 수 있는 스킬 — 공식 + 내 스킬 (관리자는 전부)."""
+    return skills.list_items(user["user_id"], user["is_admin"])
 
 
 @router.post("/skills")
-def create_skill(body: SkillIn):
+def create_skill(body: SkillIn, user: dict = Depends(current_user)):
+    """새 스킬은 기본이 '내 스킬'(나만 보임). 관리자는 바로 공식으로 만들 수 있다."""
     _check_tools(body.tools)
-    return skills.save(None, **body.model_dump())
+    data = body.model_dump(exclude={"visibility"})
+    return skills.save(None, **data, visibility=_visibility(body, user, skills.PRIVATE),
+                       owner=user["user_id"], owner_name=user["name"])
 
 
 @router.put("/skills/{skill_id}")
-def update_skill(skill_id: str, body: SkillIn):
-    _or_404(skills.get_item(skill_id), "skill")
+def update_skill(skill_id: str, body: SkillIn, user: dict = Depends(current_user)):
+    old = _skill_for(skill_id, user, edit=True)
     _check_tools(body.tools)
-    return skills.save(skill_id, **body.model_dump())
+    data = body.model_dump(exclude={"visibility"})
+    return skills.save(skill_id, **data, visibility=_visibility(body, user, old["visibility"]))
+
+
+@router.post("/skills/{skill_id}/copy")
+def copy_skill(skill_id: str, user: dict = Depends(current_user)):
+    """공식 스킬(또는 볼 수 있는 스킬)을 복제해 내 스킬로 — 원본은 그대로."""
+    src = _skill_for(skill_id, user)
+    return skills.save(None, f"{src['name']} (내 버전)"[:60], src["description"], src["tools"], src["instructions"],
+                       tags=src["tags"], visibility=skills.PRIVATE, owner=user["user_id"], owner_name=user["name"],
+                       extra=src["extra"])
 
 
 @router.delete("/skills/{skill_id}")
-def delete_skill(skill_id: str):
+def delete_skill(skill_id: str, user: dict = Depends(current_user)):
+    _skill_for(skill_id, user, edit=True)
     if not skills.delete_item(skill_id):
         raise HTTPException(404, "skill not found")
     return {"ok": True}

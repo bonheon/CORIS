@@ -5,7 +5,8 @@ import { Message } from "../types";
 import { useHub } from "../hub";
 import MessageBubble from "../components/MessageBubble";
 import Composer from "../shell/Composer";
-import ControlBar from "../shell/ControlBar";
+import QuickBar from "../shell/QuickBar";
+import { pushRecentSkills } from "../lib/recent";
 import { getFollowUpSuggestions, STARTERS } from "../lib/suggestions";
 
 let seq = 0;
@@ -20,7 +21,8 @@ export default function ChatPage({ convId, navigate }: Props) {
   const { meta, refreshConversations, refreshEvents, takePending, pendingTick, agentName, toast, conversations } = useHub();
   const [messages, setMessages] = useState<Message[]>([]);
   const [agentId, setAgentId] = useState("auto");
-  const [skillId, setSkillId] = useState<string | null>(null);
+  const [skillIds, setSkillIds] = useState<string[]>([]);   // 켜 둔 스킬 (QuickBar 칩)
+  const [area, setArea] = useState("");                       // 영역 탭 — "" = 전체
   const [toolSel, setToolSel] = useState<string[]>([]);   // 비어 있으면 자동
   const [busy, setBusy] = useState(false);
   const [loadErr, setLoadErr] = useState<string | null>(null);
@@ -48,7 +50,7 @@ export default function ChatPage({ convId, navigate }: Props) {
       (c) => {
         if (!alive) return;
         setAgentId(c.agent_id || "auto");
-        setSkillId(c.skill_id);
+        setSkillIds(c.skill_ids ?? (c.skill_id ? [c.skill_id] : []));
         setMessages(c.messages.map((m, i) => ({ id: `${c.id}-${i}`, role: m.role, content: m.content, at: m.at, tools: m.tools, route: m.route, attachments: m.attachments, suggestions: m.suggestions })));
       },
       () => alive && setLoadErr("대화를 불러오지 못했습니다"),
@@ -63,7 +65,7 @@ export default function ChatPage({ convId, navigate }: Props) {
   const patchLast = (fn: (m: Message) => Message) =>
     setMessages((prev) => prev.map((m, i) => (i === prev.length - 1 ? fn(m) : m)));
 
-  const send = useCallback(async (text: string, agent = agentId, skill = skillId, tools = toolSel, attachments: Attachment[] = []) => {
+  const send = useCallback(async (text: string, agent = agentId, skills = skillIds, tools = toolSel, attachments: Attachment[] = []) => {
     const now = new Date().toISOString();
     const startedAt = Date.now();
     const history: Message[] = [...messagesRef.current, { id: localId(), role: "user", content: text, at: now, attachments }];
@@ -73,13 +75,14 @@ export default function ChatPage({ convId, navigate }: Props) {
     abort.current = ctrl;
     let created = false;
 
+    pushRecentSkills(skills);
     try {
       await streamChat(
         {
           messages: history.map((m) => ({ role: m.role, content: m.content, attachments: m.attachments?.map((a) => a.id) })),
           conversation_id: idRef.current,
           agent_id: agent,
-          skill_id: skill,
+          skill_ids: skills,
           tool_selection: tools.length ? { tools } : null,
         },
         {
@@ -113,7 +116,7 @@ export default function ChatPage({ convId, navigate }: Props) {
       refreshConversations().catch(() => {});
       if (created) ownId.current = idRef.current;
     }
-  }, [agentId, skillId, toolSel, navigate, refreshConversations]);
+  }, [agentId, skillIds, toolSel, navigate, refreshConversations]);
 
   // 홈 / 스킬 화면에서 넘어온 질문 바로 실행
   useEffect(() => {
@@ -121,9 +124,10 @@ export default function ChatPage({ convId, navigate }: Props) {
     const p = takePending();
     if (!p) return;
     setAgentId(p.agentId);
-    setSkillId(p.skillId);
+    const pendingSkills = p.skillId ? [p.skillId] : [];
+    setSkillIds(pendingSkills);
     setToolSel(p.tools ?? []);
-    send(p.text, p.agentId, p.skillId, p.tools ?? [], p.attachments ?? []);
+    send(p.text, p.agentId, pendingSkills, p.tools ?? [], p.attachments ?? []);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingTick, convId]);
 
@@ -162,12 +166,12 @@ export default function ChatPage({ convId, navigate }: Props) {
     await api.createEvent({
       name: q.content.slice(0, 30),
       schedule: { kind: "daily", time: "07:30", weekday: null },
-      prompt: q.content, skill_id: skillId, agent_id: agentId, target: "", enabled: false,
+      prompt: q.content, skill_id: skillIds.length === 1 ? skillIds[0] : null, agent_id: agentId, target: "", enabled: false,
     });
     await refreshEvents();
     toast(`이벤터에 등록했습니다 · 매일 07:30 (꺼짐 상태)`);
     navigate("/events");
-  }, [agentId, skillId, navigate, refreshEvents, toast]);
+  }, [agentId, skillIds, navigate, refreshEvents, toast]);
 
   const copyLink = () => {
     navigator.clipboard?.writeText(window.location.href).then(() => toast("대화 링크를 복사했습니다"), () => {});
@@ -192,13 +196,15 @@ export default function ChatPage({ convId, navigate }: Props) {
           )}
         </header>
 
-        <ControlBar
+        <QuickBar
           agentId={agentId}
-          skillId={skillId}
+          skillIds={skillIds}
           selectedTools={toolSel}
+          area={area}
           onAgentChange={changeAgent}
-          onSkillChange={setSkillId}
+          onSkillIdsChange={setSkillIds}
           onToolsChange={setToolSel}
+          onAreaChange={setArea}
         />
 
         <div className="scroll">
@@ -207,10 +213,10 @@ export default function ChatPage({ convId, navigate }: Props) {
             {!convId && messages.length === 0 && (
               <div className="empty">
                 <h1>무엇을 확인할까요?</h1>
-                <p>질문하면 에이전트가 필요한 tool을 골라 조회합니다. 에이전트나 스킬을 고르면 tool 후보가 줄어 더 정확해집니다.</p>
+                <p>그냥 질문하면 필요한 tool 을 알아서 골라 조회합니다. 위에서 영역을 고르거나 스킬을 켜 두면 그 업무 방식대로 답합니다.</p>
                 <div className="starters">
                   {STARTERS.map((s) => (
-                    <button key={s.q} className="starter" onClick={() => { setAgentId(s.agent); send(s.q, s.agent, skillId); }}>
+                    <button key={s.q} className="starter" onClick={() => { setAgentId(s.agent); send(s.q, s.agent, skillIds); }}>
                       <div className="k">{s.k}</div>
                       <b>{s.q}</b>
                       <small>{s.d}</small>
@@ -235,11 +241,12 @@ export default function ChatPage({ convId, navigate }: Props) {
           onStop={stop}
           busy={busy}
           agentId={agentId}
-          skillId={skillId}
+          skillId={null}
           onAgentChange={changeAgent}
-          onSkillChange={setSkillId}
+          onSkillChange={(id) => id && setSkillIds((ids) => (ids.includes(id) ? ids : [...ids, id]))}
           selectedTools={toolSel}
           onToolsChange={setToolSel}
+          showOptions={false}
           placeholder={messages.length ? "이어서 질문하세요…" : undefined}
           autoFocus
         />

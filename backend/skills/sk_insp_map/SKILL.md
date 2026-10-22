@@ -6,6 +6,11 @@ description: |
   "TE2FE35 INSP 정리해줘", "이 lot 웨이퍼 맵 정리" 같은 요청에 사용.
 tools:
 - get_insp_map
+tags:
+- 품질
+- 공정
+- INSP
+visibility: official
 ---
 
 입력: Lot ID. 질문에 Lot ID 가 없으면 Lot ID 만 짧게 되묻고 멈춘다.

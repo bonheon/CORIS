@@ -11,17 +11,18 @@ interface Form {
   id: string; name: string; description: string; url: string; transport: string;
   headers: { k: string; v: string }[];
   enabled: boolean; tools: string[]; labels: Record<string, string>; default_on: boolean;
+  tags: string;   // 쉼표 구분 입력 — 업무 영역 (공정, 장비, 품질, 공통 …)
 }
 
 const EMPTY: Form = {
   id: "", name: "", description: "", url: "", transport: "streamable_http",
-  headers: [{ k: "Authorization", v: "" }], enabled: true, tools: [], labels: {}, default_on: true,
+  headers: [{ k: "Authorization", v: "" }], enabled: true, tools: [], labels: {}, default_on: true, tags: "",
 };
 
 const toForm = (s: McpServerConf): Form => ({
   id: s.id, name: s.name, description: s.description, url: s.url, transport: s.transport || "streamable_http",
   headers: Object.entries(s.headers).map(([k, v]) => ({ k, v })),
-  enabled: s.enabled, tools: s.tools, labels: s.labels, default_on: s.default_on,
+  enabled: s.enabled, tools: s.tools, labels: s.labels, default_on: s.default_on, tags: (s.tags ?? []).join(", "),
 });
 
 const headerMap = (rows: Form["headers"]) =>
@@ -103,6 +104,7 @@ export default function McpPage({ selected, navigate }: { selected?: string; nav
       headers: headerMap(form.headers), enabled: form.enabled, tools: form.tools,
       labels: Object.fromEntries(Object.entries(form.labels).filter(([k, v]) => form.tools.includes(k) && v.trim())),
       default_on: form.default_on,
+      tags: form.tags.split(",").map((t) => t.trim()).filter(Boolean),
     };
     try {
       const saved = isNew ? await api.createMcpServer({ id: form.id.trim(), ...body }) : await api.updateMcpServer(form.id, body);
@@ -184,6 +186,12 @@ export default function McpPage({ selected, navigate }: { selected?: string; nav
                       <input className="input" value={form.name} disabled={readOnly} maxLength={40} placeholder="예) 품질 데이터"
                         onChange={(e) => set({ name: e.target.value })} />
                     </div>
+                  </div>
+
+                  <div className="field">
+                    <label>영역 태그<span>쉼표로 구분 — 대화 위 영역 탭(공정 · 장비 · 품질)에서 이 서버의 tool 이 함께 켜집니다. '공통' 은 모든 탭</span></label>
+                    <input className="input" value={form.tags} disabled={readOnly} placeholder="예) 품질, 공정"
+                      onChange={(e) => set({ tags: e.target.value })} />
                   </div>
 
                   <div className="field">

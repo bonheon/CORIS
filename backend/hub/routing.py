@@ -90,10 +90,11 @@ def candidates(sel: ToolSelection, skill: Optional[dict]) -> list[str]:
     return ok or [catalog.FALLBACK_AGENT]
 
 
-def skill_candidates(agent_ids: list[str]) -> list[dict]:
-    """필수 tool 을 후보 agent 중 하나라도 모두 쓸 수 있는 skill."""
+def skill_candidates(agent_ids: list[str], pool: Optional[list[dict]] = None) -> list[dict]:
+    """필수 tool 을 후보 agent 중 하나라도 모두 쓸 수 있는 skill. pool 이 없으면 전체 skill 중에서."""
     pools = [set(catalog.agent_pool(a)) for a in agent_ids]
-    return [s for s in skills.list_items() if any(set(s["tools"]) <= p for p in pools)]
+    items = skills.list_items() if pool is None else pool
+    return [s for s in items if any(set(s["tools"]) <= p for p in pools)]
 
 
 def plan_tools(agent_id: str, sel: ToolSelection, skill: Optional[dict],
@@ -252,13 +253,18 @@ async def route(messages: list[dict], prev: Optional[str], cands: list[str], ski
 
 
 async def resolve(messages: list[dict], agent_id: Optional[str], skill: Optional[dict],
-                  sel: Optional[ToolSelection], prev_agent: Optional[str], prev_skill: Optional[str] = None) -> Plan:
-    """skill 을 사용자가 골랐으면 그대로(manual), 아니면 Router 가 고른다(AUTO_SKILL)."""
+                  sel: Optional[ToolSelection], prev_agent: Optional[str], prev_skill: Optional[str] = None,
+                  skill_pool: Optional[list[dict]] = None, pool_explicit: bool = False) -> Plan:
+    """skill 을 사용자가 하나 골랐으면 그대로(manual), 아니면 Router 가 skill_pool 안에서 고른다.
+
+    skill_pool: Router 가 고를 수 있는 skill (사용자에게 보이는 것만). 없으면 전체.
+    pool_explicit: 사용자가 여러 개를 직접 켜 둔 경우 — AUTO_SKILL 이 꺼져 있어도 그 안에서는 고른다.
+    """
     sel = sel or ToolSelection()
     manual_agent = agent_id in catalog.AGENTS_BY_ID
     # auto, 또는 옛 agent id(line/defect/yield 등) — 자동 분기로 처리
     cands = [agent_id] if manual_agent else candidates(sel, skill)
-    skill_cands = skill_candidates(cands) if AUTO_SKILL and not skill else []
+    skill_cands = skill_candidates(cands, skill_pool) if not skill and (pool_explicit or AUTO_SKILL) else []
     r = await route(messages, prev_agent, cands, skill, skill_cands, prev_skill)
     if manual_agent:
         reason = "사용자가 agent 를 지정" + (f" · {r.reason}" if r.skill else "")

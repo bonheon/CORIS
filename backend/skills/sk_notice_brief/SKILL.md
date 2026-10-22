@@ -7,6 +7,10 @@ description: |
 tools:
 - get_current_time
 - search_notices
+tags:
+- 공통
+- 공지
+visibility: official
 ---
 
 1. 현재 시각을 조회해 이번 주 범위를 정한다.
