@@ -56,6 +56,15 @@ class McpConn(BaseModel):
     headers: dict[str, str] = {}
 
 
+class McpGroupIn(BaseModel):
+    """서버 안의 tool 묶음 — 대화 위 ⚙ · 스킬 편집에서 이 단위로 보인다."""
+    id: str = Field(pattern=r"^[a-z0-9_]{1,24}$")
+    name: str = Field(min_length=1, max_length=40)
+    description: str = ""
+    tags: list[str] = []
+    tools: list[str] = []
+
+
 class McpServerIn(McpConn):
     name: str = Field(min_length=1, max_length=40)
     description: str = ""
@@ -64,6 +73,7 @@ class McpServerIn(McpConn):
     labels: dict[str, str] = {}
     default_on: bool = True
     tags: list[str] = []       # 업무 영역 태그 (공정 · 장비 · 품질 · 공통 등) — 대화 위 영역 탭
+    groups: list[McpGroupIn] = []   # 서버 안에서 tool 을 나눈 그룹 (비우면 서버 = 그룹 하나)
 
 
 class McpServerCreate(McpServerIn):
@@ -137,6 +147,11 @@ async def _save_mcp(server_id: str, body: McpServerIn, create: bool) -> dict:
     _ui_selected(body.tools)
     if body.enabled and not body.tools:
         raise HTTPException(422, "가져올 tool 을 1개 이상 선택하세요")
+    gids = [g.id for g in body.groups]
+    if len(gids) != len(set(gids)):
+        raise HTTPException(422, "그룹 id 가 겹칩니다")
+    for g in body.groups:  # 선택하지 않은 tool 을 그룹에 넣었으면 빼고 저장
+        g.tools = [t for t in dict.fromkeys(g.tools) if t in body.tools]
     try:
         if create:
             mcp_store.validate_id(server_id, set(mcp_registry.yaml_servers()))

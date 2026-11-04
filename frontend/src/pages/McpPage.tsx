@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Blocks, Info, Plus, RotateCw, Trash2 } from "lucide-react";
 import { api, McpServerConf, McpToolSpec } from "../api";
 import { useHub } from "../hub";
+import McpToolGrouper from "./McpToolGrouper";
 import { skillDraft } from "../lib/draft";
 
 // MCP 서버 — 회사 MCP 주소 등록 → tool 목록 불러오기 → 가져올 tool 선택 → 저장 → 스킬 만들기.
@@ -11,18 +12,25 @@ interface Form {
   id: string; name: string; description: string; url: string; transport: string;
   headers: { k: string; v: string }[];
   enabled: boolean; tools: string[]; labels: Record<string, string>; default_on: boolean;
-  tags: string;   // 쉼표 구분 입력 — 업무 영역 (공정, 장비, 품질, 공통 …)
+  tags: string;   // 쉼표 구분 입력 — 업무 영역 (공정, 장비, 품질, 생산, 공통 …)
+  groups: { id: string; name: string; description: string; tags: string }[];   // 서버 안의 tool 묶음
+  toolGroup: Record<string, string>;   // tool → 그룹 id (없으면 서버 이름의 기본 그룹)
 }
+
+const splitTags = (v: string) => v.split(",").map((t) => t.trim()).filter(Boolean);
 
 const EMPTY: Form = {
   id: "", name: "", description: "", url: "", transport: "streamable_http",
   headers: [{ k: "Authorization", v: "" }], enabled: true, tools: [], labels: {}, default_on: true, tags: "",
+  groups: [], toolGroup: {},
 };
 
 const toForm = (s: McpServerConf): Form => ({
   id: s.id, name: s.name, description: s.description, url: s.url, transport: s.transport || "streamable_http",
   headers: Object.entries(s.headers).map(([k, v]) => ({ k, v })),
   enabled: s.enabled, tools: s.tools, labels: s.labels, default_on: s.default_on, tags: (s.tags ?? []).join(", "),
+  groups: (s.groups ?? []).map((g) => ({ id: g.id, name: g.name, description: g.description, tags: g.tags.join(", ") })),
+  toolGroup: Object.fromEntries((s.groups ?? []).flatMap((g) => g.tools.map((t) => [t, g.id]))),
 });
 
 const headerMap = (rows: Form["headers"]) =>
@@ -87,9 +95,6 @@ export default function McpPage({ selected, navigate }: { selected?: string; nav
   const offered = useMemo(() => new Set((specs ?? []).map((t) => t.name)), [specs]);
   const missing = specs ? form.tools.filter((t) => !offered.has(t)) : [];
 
-  const toggle = (name: string) =>
-    set({ tools: form.tools.includes(name) ? form.tools.filter((t) => t !== name) : [...form.tools, name] });
-  const all = (on: boolean) => set({ tools: on ? pickable.map((t) => t.name) : [] });
 
   const dirty = isNew || !current || JSON.stringify(form) !== JSON.stringify(toForm(current));
 
@@ -104,7 +109,11 @@ export default function McpPage({ selected, navigate }: { selected?: string; nav
       headers: headerMap(form.headers), enabled: form.enabled, tools: form.tools,
       labels: Object.fromEntries(Object.entries(form.labels).filter(([k, v]) => form.tools.includes(k) && v.trim())),
       default_on: form.default_on,
-      tags: form.tags.split(",").map((t) => t.trim()).filter(Boolean),
+      tags: splitTags(form.tags),
+      groups: form.groups.map((g) => ({
+        id: g.id, name: g.name.trim() || g.id, description: g.description, tags: splitTags(g.tags),
+        tools: form.tools.filter((t) => form.toolGroup[t] === g.id),
+      })),
     };
     try {
       const saved = isNew ? await api.createMcpServer({ id: form.id.trim(), ...body }) : await api.updateMcpServer(form.id, body);
@@ -228,12 +237,8 @@ export default function McpPage({ selected, navigate }: { selected?: string; nav
                   <div className="field">
                     <div className="label" style={{ display: "flex", alignItems: "center", gap: 8 }}>
                       tool
-                      <span>{specs ? `${form.tools.length} / ${pickable.length} 선택` : "목록을 불러오세요"}</span>
+                      <span>{specs ? `서버 ${pickable.length}개 · 가져옴 ${form.tools.length}개 · 그룹 ${form.groups.length}개` : "목록을 불러오세요"}</span>
                       <span style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
-                        {specs && !readOnly && <>
-                          <button className="ghost" onClick={() => all(true)}>전체 선택</button>
-                          <button className="ghost" onClick={() => all(false)}>전체 해제</button>
-                        </>}
                         <button className="btn sm" disabled={probing}
                           onClick={() => probe(form, isNew ? undefined : form.id, readOnly)}>
                           <RotateCw size={12} className={probing ? "spinning" : ""} />{specs ? "다시 불러오기" : "tool 목록 불러오기"}
@@ -245,31 +250,45 @@ export default function McpPage({ selected, navigate }: { selected?: string; nav
                       <div className="note err" style={{ marginBottom: 8 }}>서버에 없는 tool 이 선택되어 있습니다 (사용 불가): {missing.join(", ")}</div>
                     )}
                     {specs && specs.length === 0 && <div className="muted" style={{ fontSize: 12.5 }}>서버가 제공하는 tool 이 없습니다</div>}
+                    {specs && !readOnly && (
+                      <McpToolGrouper specs={specs} tools={form.tools} toolGroup={form.toolGroup} groups={form.groups}
+                        serverName={form.name} labels={form.labels} onChange={(p) => set(p)} />
+                    )}
+                    {readOnly && (
                     <div className="tools mcp-tools">
-                      {(specs ?? []).map((t) => {
-                        const on = form.tools.includes(t.name) || (readOnly && (!form.tools.length || form.tools.includes(t.name)));
-                        return (
-                          <label key={t.name} className={`tool ${on && !t.ui ? "sel" : ""} ${t.ui ? "off" : ""}`}>
-                            <input type="checkbox" checked={on && !t.ui} disabled={readOnly || t.ui} onChange={() => toggle(t.name)} />
-                            <div style={{ minWidth: 0, flex: 1 }}>
-                              <b>{form.labels[t.name] || t.name}{t.ui && <span className="pill mute" style={{ marginLeft: 6 }}>화면 전용</span>}</b>
-                              <code>{t.name}</code>
-                              <p title={t.description}>{firstLine(t.description) || "설명 없음"}</p>
-                              {t.params.length > 0 && (
-                                <div className="tools-mini">
-                                  {t.params.map((p) => <span key={p.name} title={p.description}>{p.name}{p.required ? "*" : ""}: {p.type}</span>)}
-                                </div>
-                              )}
-                              {on && !t.ui && !readOnly && (
-                                <input className="input mcp-label" value={form.labels[t.name] ?? ""} placeholder="화면 표시명 (선택)"
-                                  onClick={(e) => e.preventDefault()}
-                                  onChange={(e) => set({ labels: { ...form.labels, [t.name]: e.target.value } })} />
-                              )}
-                            </div>
-                          </label>
-                        );
-                      })}
-                    </div>
+                        {(specs ?? []).map((t) => {
+                          const on = form.tools.includes(t.name) || (readOnly && (!form.tools.length || form.tools.includes(t.name)));
+                          return (
+                            <label key={t.name} className={`tool ${on && !t.ui ? "sel" : ""} ${t.ui ? "off" : ""}`}>
+                              <input type="checkbox" checked={on && !t.ui} disabled readOnly />
+                              <div style={{ minWidth: 0, flex: 1 }}>
+                                <b>{form.labels[t.name] || t.name}{t.ui && <span className="pill mute" style={{ marginLeft: 6 }}>화면 전용</span>}</b>
+                                <code>{t.name}</code>
+                                <p title={t.description}>{firstLine(t.description) || "설명 없음"}</p>
+                                {t.params.length > 0 && (
+                                  <div className="tools-mini">
+                                    {t.params.map((p) => <span key={p.name} title={p.description}>{p.name}{p.required ? "*" : ""}: {p.type}</span>)}
+                                  </div>
+                                )}
+                                {on && !t.ui && !readOnly && (
+                                  <input className="input mcp-label" value={form.labels[t.name] ?? ""} placeholder="화면 표시명 (선택)"
+                                    onClick={(e) => e.preventDefault()}
+                                    onChange={(e) => set({ labels: { ...form.labels, [t.name]: e.target.value } })} />
+                                )}
+                                {on && !t.ui && !readOnly && form.groups.length > 0 && (
+                                  <select className="select mcp-gsel" value={form.toolGroup[t.name] ?? ""}
+                                    onClick={(e) => e.stopPropagation()}
+                                    onChange={(e) => set({ toolGroup: { ...form.toolGroup, [t.name]: e.target.value } })}>
+                                    <option value="">그룹: 기본 ({form.name || "서버 이름"})</option>
+                                    {form.groups.map((g) => <option key={g.id} value={g.id}>그룹: {g.name || g.id}</option>)}
+                                  </select>
+                                )}
+                              </div>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
 
                   {!readOnly && (

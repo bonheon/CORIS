@@ -86,14 +86,35 @@ TOOL_LABELS: dict[str, str] = {}   # tool 이름 → 화면 표시명 (없으면
 _GROUP_OF: dict[str, str] = {}     # tool → 소속 group (화면 분류용, 여러 group 에 속하면 첫 번째)
 
 
+def _server_groups(s: dict) -> list[dict]:
+    """화면에서 등록한 서버 → tool group 들.
+
+    서버 안에 그룹을 나눠 두었으면(s.groups) 그룹마다 하나씩 (id: mcp_<서버>__<그룹>),
+    어느 그룹에도 넣지 않은 tool 은 서버 이름의 기본 그룹으로 모은다. 그룹을 안 나눴으면 서버 = 그룹 하나.
+    그룹에 태그가 없으면 서버 태그를 물려받는다.
+    """
+    selected = [n for n in s.get("tools") or [] if n not in UI_TOOLS]
+    server_tags = [str(t) for t in s.get("tags") or []]
+    base = {"imported": True, "default_on": s.get("default_on", True), "server": s["id"]}
+    out, used = [], set()
+    for g in s.get("groups") or []:
+        tools = [n for n in g.get("tools") or [] if n in selected and n not in used]
+        used.update(tools)
+        if tools:
+            out.append(base | {
+                "id": f"{mcp_store.group_id(s['id'])}__{g['id']}", "name": g["name"],
+                "description": g.get("description") or s["name"],
+                "tags": [str(t) for t in g.get("tags") or []] or server_tags, "tools": tools,
+            })
+    rest = [n for n in selected if n not in used]
+    if rest:
+        out.append(base | {"id": mcp_store.group_id(s["id"]), "name": s["name"],
+                           "description": s.get("description") or s["url"], "tags": server_tags, "tools": rest})
+    return out
+
+
 def _imported_groups() -> list[dict]:
-    return [
-        {"id": mcp_store.group_id(s["id"]), "name": s["name"], "description": s.get("description") or s["url"],
-         "tags": [str(t) for t in s.get("tags") or []],
-         "tools": [n for n in s.get("tools") or [] if n not in UI_TOOLS],
-         "imported": True, "default_on": s.get("default_on", True)}
-        for s in mcp_store.list_items() if s.get("enabled", True)
-    ]
+    return [g for s in mcp_store.list_items() if s.get("enabled", True) for g in _server_groups(s)]
 
 
 def rebuild() -> None:

@@ -21,8 +21,10 @@ export interface McpServerConf {
   id: string; name: string; description: string; url: string; transport: string;
   headers: Record<string, string>;   // 값은 가려져서 온다 (그대로 보내면 기존 값 유지)
   enabled: boolean; tools: string[]; labels: Record<string, string>; default_on: boolean; tags?: string[];
+  groups?: McpGroup[];   // 서버 안의 tool 묶음 (비우면 서버 = 그룹 하나)
   source: "yaml" | "hub"; status?: McpServer | null;
 }
+export interface McpGroup { id: string; name: string; description: string; tags: string[]; tools: string[] }
 export type McpServerInput = Omit<McpServerConf, "source" | "status">;
 export interface McpToolSpec {
   name: string; description: string; ui: boolean;
