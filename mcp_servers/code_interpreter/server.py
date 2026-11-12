@@ -205,6 +205,8 @@ async def run_python(code: str, session_id: str = "") -> str:
     사용 가능: pandas, numpy, plotly, matplotlib
     도우미 함수:
       - load_ref(data_ref) → 다른 tool 결과의 data_ref 데이터를 DataFrame(x, series, value)으로
+        data_ref 가 "result/..." 이면 줄여서 온 tool 결과의 원본 전체 — 행 목록은 DataFrame, dict 는 dict 로 온다
+        (결과에 "_truncated": true 가 있으면 보이는 값은 일부다. 집계 · 필터 · 행 단위 확인은 반드시 이것으로 한다)
       - save_html(fig, "제목") → plotly Figure 를 대화형 차트 결과물로 저장 ([ARTIFACT:id] 생성)
     자주 쓰는 패턴 (load_ref 결과는 long 형식: x, series, value):
       df = load_ref(ref).sort_values("x")

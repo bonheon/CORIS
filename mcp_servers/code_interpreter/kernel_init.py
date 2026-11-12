@@ -4,6 +4,7 @@
     save_html(obj, title)  plotly Figure / DataFrame / HTML 문자열 → 결과물 저장, [ARTIFACT:id] 출력
     load_ref(ref)          다른 tool 결과의 data_ref → Coris 의 /api/ui/{ref} 로 데이터 받기
                            (Coris 공통 차트 형식이면 DataFrame: x, series, value)
+                           'result/<id>' 는 큰 tool 결과의 원본 — 행 목록이면 DataFrame, 아니면 dict
 
 이 파일은 import 하지 않고 문자열로 읽어 커널에 보낸다.
 """
@@ -43,10 +44,19 @@ def save_html(obj, title="차트"):
 
 
 def load_ref(ref):
-    """data_ref(예: 'ui_metric_trend?metric=thickness&days=30') 의 데이터를 받아온다."""
+    """data_ref 의 데이터를 전부 받아온다 — 값을 코드에 옮겨 적지 않고 이것으로 읽는다.
+
+    'ui_metric_trend?metric=thickness&days=30'  화면 tool 데이터. Coris 공통 차트 형식이면 DataFrame(x, series, value)
+    'result/r_xxxx'                             큰 tool 결과의 원본 (LLM 에는 요약만 갔다). 행 목록이면 DataFrame,
+                                                dict 면 dict 그대로 — pd.DataFrame(data["키"]) 로 표를 꺼낸다
+    """
     url = f"{_CORIS_API}/api/ui/{_urlparse.quote(ref.lstrip('/'), safe='?=&/%:,._-')}"
-    with _urlreq.urlopen(url, timeout=30) as r:
-        data = _json.load(r)
+    with _urlreq.urlopen(url, timeout=60) as r:
+        raw = r.read().decode("utf-8")
+    try:
+        data = _json.loads(raw)
+    except ValueError:
+        return raw  # JSON 이 아닌 결과 — 문자열 그대로
     if isinstance(data, dict) and isinstance(data.get("series"), list):
         import pandas as pd
         rows = [{"x": p[0], "series": s.get("name"), "value": p[1]} for s in data["series"] for p in s.get("data", [])]
@@ -55,4 +65,7 @@ def load_ref(ref):
             df["x"] = pd.to_datetime(df["x"])
         df.attrs.update(title=data.get("title"), y=data.get("y"), limits=data.get("limits"))
         return df
+    if isinstance(data, list) and data and all(isinstance(r, dict) for r in data):
+        import pandas as pd
+        return pd.DataFrame(data)
     return data

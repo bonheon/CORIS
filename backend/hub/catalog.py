@@ -14,7 +14,7 @@ from pathlib import Path
 
 import yaml
 
-from hub import mcp_registry, mcp_store, session_tools
+from hub import mcp_registry, mcp_store, result_store, session_tools
 
 log = logging.getLogger("catalog")
 
@@ -163,6 +163,7 @@ async def refresh() -> dict:
     reload_yaml()
     rebuild()
     tools = session_tools.wrap_all(await mcp_registry.load_tools(always_keep=UI_TOOLS))
+    tools = result_store.wrap_all(tools, skip=set(UI_TOOLS))  # 큰 결과는 파일로 두고 LLM 에는 요약 + data_ref
     TOOLS_BY_NAME.clear()
     TOOLS_BY_NAME.update(tools)
     VERSION += 1

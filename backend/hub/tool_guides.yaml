@@ -27,6 +27,9 @@ get_insp_map: |
 run_python: |
   호출할 때마다 같은 대화의 Python 세션이 이어진다 (변수 · import 유지).
   - 데이터: load_ref("<다른 tool 결과의 data_ref>") → pandas DataFrame (x, series, value 열). 값을 코드에 직접 옮겨 적지 않는다
+  - tool 결과에 "_truncated": true 가 있으면 원본이 커서 요약만 온 것이다 (_rows = 전체 행 수, _preview = 앞 몇 행).
+    합계 · 개수 · 조건에 맞는 행 · 순위처럼 전체 행이 필요한 답은 load_ref("result/...") 로 원본을 받아 계산한다.
+    _preview 만 보고 전체를 추정하지 않는다. 행 목록은 DataFrame, dict 는 dict 로 온다 — pd.DataFrame(data["키"])
   - 차트: plotly 로 그리고 save_html(fig, "제목") — 결과의 [ARTIFACT:...] 태그를 답변에 그대로 넣으면 화면에 대화형 차트가 보인다
   - matplotlib 이미지도 자동으로 [ARTIFACT:...] 가 생긴다. 대화형이 필요하면 plotly 를 쓴다
   - 오류가 나면 traceback 을 보고 고쳐서 다시 실행한다
