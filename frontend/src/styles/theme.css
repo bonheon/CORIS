@@ -86,9 +86,20 @@ a { color: var(--green-ink); }
 .cv small { display: block; font-size: 12px; color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
 .cv .auto { font-size: 10.5px; color: var(--green-ink); background: var(--green-soft); border-radius: 4px; padding: 0 5px; font-weight: 600; }
 .cv.on .auto { background: var(--panel); }
-.cv .del { position: absolute; right: 6px; top: 8px; width: 22px; height: 22px; border-radius: 6px; border: 0; background: var(--panel); color: var(--faint); display: none; place-items: center; }
-.cv:hover .del { display: grid; }
-.cv .del:hover { color: var(--err); }
+/* 대화 항목 동작 — 마우스를 올리면 즐겨찾기 · 이름 변경 · 삭제 */
+.cv-acts { position: absolute; right: 6px; top: 7px; display: none; gap: 2px; background: var(--panel); border-radius: 7px; padding: 1px; box-shadow: 0 1px 3px rgba(0, 0, 0, .08); }
+.cv:hover .cv-acts, .cv:focus-within .cv-acts { display: flex; }
+.cv-acts button { width: 22px; height: 22px; border-radius: 6px; border: 0; background: none; color: var(--faint); display: grid; place-items: center; }
+.cv-acts button:hover { background: var(--hover); color: var(--ink); }
+.cv-acts button.on { color: var(--warn); }
+.cv-acts button.on svg { fill: currentColor; }
+.cv-acts .del:hover { color: var(--err); }
+.cv .cv-star { color: var(--warn); fill: currentColor; flex-shrink: 0; }
+.cv-rename { flex: 1; min-width: 0; font-size: 13px; font-weight: 600; border: 1px solid var(--green); border-radius: 5px; padding: 1px 5px; background: var(--panel); color: var(--ink); outline: none; }
+.list-head .cl-clear { margin-left: auto; color: var(--faint); }
+.list-head .cl-clear:hover:not(:disabled) { color: var(--err); }
+.list-head .cl-clear:disabled { opacity: .35; cursor: default; }
+.list-head .cl-clear + .btn-new { margin-left: 0; }
 .list-empty { padding: 24px 12px; text-align: center; color: var(--faint); font-size: 12.5px; }
 
 /* ── Center ── */
@@ -264,7 +275,7 @@ a { color: var(--green-ink); }
 .skeleton { background: linear-gradient(90deg, var(--sand), var(--hover), var(--sand)); background-size: 200% 100%; animation: sk 1.2s infinite; border-radius: 8px; }
 @keyframes sk { to { background-position: -200% 0; } }
 
-/* ── Pages (스킬 / 이벤터 / 포탈) ── */
+/* ── Pages (스킬 / 스케줄링 / 작업 목록 / 포탈) ── */
 .page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
 .page-head h1 { font-size: 20px; font-weight: 700; letter-spacing: -.4px; }
 .page-head p { color: var(--sub); font-size: 13px; margin-top: 2px; }
@@ -535,3 +546,81 @@ a { color: var(--green-ink); }
 .tg-act .select, .tg-act .input { width: auto; min-width: 150px; padding: 4px 8px; font-size: 12.5px; }
 .tg-sep { color: var(--faint); }
 @media (max-width: 900px) { .tg-body { grid-template-columns: 1fr; } .tg-list { border-right: 0; border-bottom: 1px solid var(--line); } }
+
+/* tool 그룹 메뉴 — 목록 구역 · tool 카드 */
+.tg-sec { display: flex; align-items: center; gap: 6px; padding: 10px 14px 6px; font-size: 11.5px; font-weight: 700; color: var(--faint); border-bottom: 1px solid var(--line); }
+.tg-sec span { font-weight: 500; }
+.tg-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.tg-bar .input { flex: 1; }
+.tg-bar .mcp-chk { white-space: nowrap; }
+.tool .tg-owner { margin-top: 6px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.tool.ro { cursor: default; }
+/* 작업 큐 */
+.tk-row { display: flex; align-items: center; gap: 8px; padding: 9px 16px; border-bottom: 1px solid var(--line); font-size: 12.5px; }
+.tk-row:last-child { border-bottom: 0; }
+.tk-row .ell { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tk-pos { width: 20px; height: 20px; border-radius: 6px; background: var(--sand); color: var(--sub); display: grid; place-items: center; font-size: 11px; font-weight: 700; flex-shrink: 0; }
+.tbl td.tk-sum { max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--sub); font-size: 12.5px; }
+.list-head .cl-clear { width: 28px; height: 28px; border-radius: 7px; }
+
+/* 차트 결과물 카드 — 내용 높이에 맞춘 iframe · 크게 보기 */
+.art-card { margin: 0; overflow: hidden; }
+.art-card .panel-h small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.art-acts { margin-left: auto; display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.art-body { padding: 4px 6px 6px; }
+.art-frame { display: block; width: 100%; border: 0; border-radius: 8px; background: var(--panel); }
+.art-img { display: block; max-width: 100%; margin: 0 auto; border-radius: 8px; }
+.art-full { position: fixed; inset: 0; z-index: 60; background: rgba(15, 18, 16, .55); display: grid; place-items: center; padding: 24px; }
+.art-full-box { width: min(1600px, 100%); height: min(960px, 100%); background: var(--panel); border-radius: 14px; box-shadow: 0 20px 60px rgba(0, 0, 0, .3); display: flex; flex-direction: column; overflow: hidden; }
+.art-full-body { flex: 1; min-height: 0; padding: 6px 10px 10px; overflow: auto; }
+.art-full-body .art-img { max-height: 100%; }
+@media (max-width: 760px) { .art-full { padding: 0; } .art-full-box { border-radius: 0; } }
+
+/* 대화 화면 — 글 · 차트 · 입력창 모두 읽기 좋은 폭(800px). 차트를 크게 볼 때는 카드의 '크게'(전체 화면) */
+.inner.chat { max-width: 800px; }
+.chat-page .box { max-width: 800px; }
+
+/* 대화 목록 접기 */
+.ws.nolist { grid-template-columns: 56px minmax(0, 1fr); }
+.list-head .cl-fold { width: 26px; height: 26px; border-radius: 7px; color: var(--faint); border: 0; margin-left: -4px; }
+
+/* 대화 목록 — 답변 상태 (답변 중: 화면을 떠나도 서버에서 계속 · 답변 완료: 보지 않는 사이 끝남, 열면 사라짐) */
+.cv-st { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; font-size: 10.5px; font-weight: 600; border-radius: 4px; padding: 0 5px; line-height: 17px; }
+.cv-st.run { color: var(--warn); background: var(--warn-soft); }
+.cv-st.run .spin { width: 9px; height: 9px; border-width: 1.5px; }
+.cv-st.done { color: var(--green-ink); background: var(--green-soft); }
+.cv.on .cv-st.done { background: var(--panel); }
+
+/* 스킬 단계 편집기 */
+.steps-ed { display: grid; gap: 8px; }
+.steps-sub { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; font-size: 12.5px; }
+.steps-sub span { color: var(--faint); }
+.in-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) auto auto; gap: 6px; align-items: center; }
+.step-card { border: 1px solid var(--line); border-left: 3px solid var(--line-strong); border-radius: 10px; padding: 10px 12px; background: var(--panel); display: grid; gap: 8px; }
+.step-card.t-data { border-left-color: var(--green); }
+.step-card.t-compute, .step-card.t-condition { border-left-color: #3b82c4; }
+.step-card.t-judge { border-left-color: var(--warn); }
+.step-card.t-report { border-left-color: var(--ink); }
+.step-h { display: flex; gap: 6px; align-items: center; }
+.step-no { width: 22px; height: 22px; border-radius: 6px; background: var(--sand); display: grid; place-items: center; font-size: 11.5px; font-weight: 700; color: var(--sub); flex-shrink: 0; }
+.step-h .step-id { width: 64px; flex-shrink: 0; }
+.step-h .step-type { width: 120px; flex-shrink: 0; }
+.step-h > .input:not(.step-id) { flex: 1; min-width: 0; }
+.step-acts { display: flex; gap: 2px; flex-shrink: 0; }
+.step-acts .ib { width: 28px; height: 28px; }
+.step-hint { font-size: 12px; color: var(--faint); margin: 0; }
+.step-grid { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 6px 10px; align-items: start; }
+.step-grid > label { font-size: 12.5px; font-weight: 600; padding-top: 7px; }
+.step-grid > label span { display: block; font-weight: 500; color: var(--faint); font-size: 11px; }
+.step-inline { display: flex; gap: 6px; align-items: center; }
+.step-inline .input { flex: 1; min-width: 0; }
+.step-chips { display: flex; flex-wrap: wrap; gap: 5px; padding-top: 4px; }
+.chip-btn { border: 1px solid var(--line-strong); background: var(--panel); border-radius: 999px; padding: 2px 10px; font-size: 12px; color: var(--sub); }
+.chip-btn.on { background: var(--green-soft); border-color: var(--green); color: var(--green-ink); font-weight: 600; }
+.step-kv { display: grid; gap: 5px; }
+.step-kv-row { display: grid; grid-template-columns: minmax(0, .8fr) minmax(0, 1.4fr) auto auto; gap: 6px; align-items: center; }
+.step-kv .ib { width: 30px; height: 30px; }
+.ref-pick { width: 108px; font-size: 12px; padding: 4px 6px; }
+.step-add { display: flex; flex-wrap: wrap; gap: 6px; padding-top: 2px; }
+.input.mono, .textarea.mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12.5px; }
+@media (max-width: 760px) { .step-grid { grid-template-columns: 1fr; } .in-row, .step-kv-row { grid-template-columns: 1fr 1fr; } }

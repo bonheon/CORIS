@@ -23,7 +23,9 @@
 ## 1. 회사 배포 전 필수 (기반)
 
 - [ ] **MCP tool 호출 시간 제한** — 지금은 tool 목록 받기에만 10초 제한, 실제 호출은 무제한 (서버 하나가 멈추면 답변 전체가 멈춤)
-- [ ] **tool 결과 크기 제한** — 실행 중에는 결과 전체가 LLM 에 들어감 (저장할 때만 3000자). 큰 표를 주는 회사 MCP 대비
+- [x] **tool 결과 크기 제한** — 큰 표는 저장소 보관 + 요약 · data_ref (hub/offload.py). 남은 것: 표로 읽히지 않는 큰 텍스트 결과는 아직 그대로 들어감
+- [ ] 회사 MCP tool 결과 형식 JSON 표준화 (columns · rows · summary · meta) — 큰 결과가 나오는 tool 부터
+- [ ] 사내 S3 연결 확인 (`STORAGE=s3`, 버킷 lifecycle 규칙 `tool-results/` 7일)
 - [ ] **사용자 정보를 MCP 로 전달** — 지금은 서버별 고정 토큰. 회사 MCP 의 사용자 식별 방식 확인 필요 (`X-User-Id` 헤더 / 사용자 토큰 / SSO 토큰 전달)
 - [ ] **관리 권한** — MCP 서버 등록 · 스킬 수정/삭제를 관리자만 (지금은 누구나)
 - [ ] **실행 추적(tracing)** — 단계별 LLM 입출력 · 토큰 · 비용 기록 (Phoenix 또는 LangSmith 류). 씨리아 이관 품질 비교에 필요
@@ -33,15 +35,18 @@
 
 ## 1-1. SOP 스킬 단계형 실행 엔진 (다음 작업 후보)
 
-- [ ] SKILL.md 의 `steps` 를 LangGraph 로 변환해 실행 — data · condition · report 는 코드, judge 만 LLM
+- [x] SKILL.md 의 `steps` 실행 엔진 — data · compute · condition · report 는 코드, judge 만 LLM (hub/steps.py, LangGraph 대신 직접 실행)
       (샘플 테스트에서 LLM 이 '설비마다 따로 조회' 단계를 4번 중 2번 어김 → 반복 · 데이터 연결은 코드가 해야 함)
-- [ ] 스킬 화면에 단계 목록 편집기 (위에서 아래로 쌓는 형식, 인자는 '입력 / 앞 단계 결과' 드롭다운)
+- [x] 스킬 화면에 단계 목록 편집기 (components/StepEditor.tsx — 참조 넣기 드롭다운, 저장 전 검사)
+- [ ] 단계 '시험 실행' (편집 화면에서 바로 실행해 단계별 결과 미리보기)
+- [ ] Python 계산 단계 (code interpreter 에서 실행 — 정해진 op 로 부족한 계산)
 - [ ] 스킬 `inputs` 로 대화 위 입력 칸 (Lot ID 등) 제공
 - [ ] SOP 문서 → 스킬 초안 자동 생성 (단계 · 판정 기준 · 보고 양식 추출)
 
 ## 2. Agent 구성 (씨리아 · Trouble Lot)
 
-- [ ] `catalog.yaml` 에 agent 2개 정의 — 씨리아(지식 검색만) / Trouble Lot(Lot · Hold · 설비 + 지식 검색)
+- [x] `catalog.yaml` 에 agent 2개 정의 — Ceeria(지식 검색만) / Trouble Lot(Lot · Hold · 설비 + 지식 검색), Jev 방식 agent 선택 (hub/jev.py)
+- [ ] Jev 신뢰도 기준 보정 — gpt-4o-mini 는 거의 항상 1.00 이라 기준이 작동하지 않음. 사내 LLM · 실제 질문 세트로 다시 측정
 - [ ] 씨리아 지식 검색을 MCP tool 로 노출 — `search_knowledge(query)` → 문서 조각 + 출처(문서 id · 페이지). 단독 챗봇용 요약 기능은 씨리아 쪽에 유지
 - [ ] 씨리아의 ReAct 검증 로직("다시 확인해서 검증")을 Trouble Lot **skill 절차**로 옮기기
 - [ ] 데이터 tool 회사 MCP 이관 완료 후 화면(MCP 서버)에서 등록
@@ -55,7 +60,7 @@
 - [ ] **컨테이너 격리** — 지금은 로컬 프로세스(같은 권한). Docker: 네트워크는 Coris API 만, CPU · 메모리 · 디스크 제한 (회사 Docker 사용 가능 여부 확인)
 - [ ] 사내 pip 미러 / 패키지 사전 설치 이미지
 - [ ] **파일 업로드(엑셀 · CSV) → 커널 작업 폴더** 로 넘기기 (이미지 첨부와 같은 업로드 경로 재사용)
-- [ ] `load_ref` 일반화 — 지금은 화면 전용 ui tool 데이터만. LLM tool 결과도 파일로 넘기는 경로
+- [x] `load_ref` 일반화 — 큰 tool 결과 `dr_...` 를 타입 살린 DataFrame 으로 (대화별 접근 제한 · 커널 캐시)
 - [ ] 결과물 내보내기 — 엑셀 · PPT 초안 파일 생성 → 다운로드 카드
 - [ ] 세션 초기화 tool, 결과물(artifacts) 보관 기간 정리
 - [ ] 결과물 HTML 다운로드 시 plotly CDN 참조 → 사내망에서는 열리지 않음. 파일에 plotly.js 를 포함하는 옵션

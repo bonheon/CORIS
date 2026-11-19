@@ -62,7 +62,7 @@ class Session:
         self.sid = sid
         self.dir = SESSION_DIR / sid
         self.dir.mkdir(parents=True, exist_ok=True)
-        env = {**os.environ, "CI_ARTIFACT_DIR": str(ARTIFACT_DIR)}
+        env = {**os.environ, "CI_ARTIFACT_DIR": str(ARTIFACT_DIR), "CI_SESSION_ID": sid}   # load_ref 가 자기 대화 데이터만 받도록
         self.km = KernelManager(kernel_name="python3")
         self.km.start_kernel(cwd=str(self.dir), env=env)
         self.kc = self.km.blocking_client()
@@ -70,6 +70,8 @@ class Session:
         self.kc.wait_for_ready(timeout=60)
         self.lock = threading.Lock()
         self.last_used = time.time()
+        self.last_error: str | None = None   # 같은 오류 반복 감지
+        self.errors = 0
         out = self.execute(INIT_CODE, timeout=60)
         if out["error"]:
             raise RuntimeError(f"커널 초기화 실패: {out['error']}")
@@ -154,13 +156,39 @@ def _save_image(b64png: str, title: str) -> str:
     return aid
 
 
+# 자주 나는 오류 → 고치는 방법 (LLM 이 같은 수정을 반복하지 않게 오류 메시지 앞에 붙인다)
+_HINTS = [
+    ("not JSON serializable", "Period", "pandas Period(dt.to_period) 는 차트에 못 넣는다 — "
+     "월별은 df.groupby(pd.Grouper(key='일자', freq='MS')) 또는 .dt.to_period('M').dt.to_timestamp() 로 날짜형을 쓴다"),
+    ("not JSON serializable", "", "차트에 넣는 값을 숫자 · 문자열 · 날짜형으로 바꾼다 (astype(str) 또는 to_timestamp())"),
+    ("Can only use .dt accessor", "", "그 열은 이미 날짜형이 아니다 (앞선 실행에서 바뀌었을 수 있음) — "
+     "df = load_ref(...) 로 다시 불러 처음부터 실행하거나 pd.to_datetime 으로 바꾼 뒤 .dt 를 쓴다"),
+    ("KeyError", "", "열 이름을 확인한다 — print(df.columns.tolist()). 보관된 표의 열 이름은 한글 · 괄호를 포함한 그대로다"),
+]
+
+
+def _hint(head: str) -> str:
+    for a, b, h in _HINTS:
+        if a in head and b in head:
+            return h
+    return ""
+
+
 def _format_error(content: dict) -> str:
-    """LLM 이 고칠 수 있게 — 예외 메시지를 맨 앞에, traceback 은 끝부분(실패한 줄 · 원인)만.
-    앞에서 자르면 정작 중요한 마지막 예외 메시지가 잘려 같은 코드를 반복한다."""
+    """LLM 이 고칠 수 있게 — 예외 메시지 · 고치는 방법(아는 오류면) · 실패한 '내 코드' 줄 · traceback 끝부분.
+    traceback 끝부분만 주면 라이브러리 내부 줄만 보여 어느 줄이 문제인지 모르고 같은 수정을 반복한다."""
     head = f"{content.get('ename')}: {content.get('evalue')}"
-    tb = _ANSI.sub("", "\n".join(content.get("traceback") or []))
+    frames = [_ANSI.sub("", f) for f in content.get("traceback") or []]
+    mine = [f for f in frames if "Cell In[" in f or "Input In [" in f]   # 실행한 코드 셀 프레임
+    tb = "\n".join(frames)
     tail = tb[-ERROR_TAIL_CHARS:]
-    return f"{head}\n\n(traceback 끝부분)\n{'…' if len(tb) > ERROR_TAIL_CHARS else ''}{tail}"
+    parts = [head]
+    if (h := _hint(head)):
+        parts.append(f"고치는 방법: {h}")
+    if mine:
+        parts.append("(실패한 내 코드 줄)\n" + mine[-1][-1200:])
+    parts.append(f"(traceback 끝부분)\n{'…' if len(tb) > ERROR_TAIL_CHARS else ''}{tail}")
+    return "\n\n".join(parts)
 
 
 def _clip(text: str, limit: int) -> str:
@@ -181,6 +209,8 @@ def _run(code: str, session_id: str) -> str:
     stdout = _TAG.sub("", stdout).strip()
     artifacts += [_save_image(img, "그림") for img in out["images"]]
 
+    if not out["error"]:
+        session.last_error, session.errors = None, 0
     parts = []
     if stdout:
         parts.append("[stdout]\n" + _clip(stdout, OUTPUT_CHARS))
@@ -189,7 +219,14 @@ def _run(code: str, session_id: str) -> str:
     if out["timed_out"]:
         parts.append(f"[error]\n실행 시간 {EXEC_TIMEOUT:.0f}초를 넘어 중단했습니다. 데이터를 줄이거나 나눠서 실행하세요.")
     elif out["error"]:
-        parts.append("[error]\n" + out["error"])
+        err = out["error"]
+        head = err.split("\n", 1)[0]
+        session.errors = session.errors + 1 if head == session.last_error else 1
+        session.last_error = head
+        if session.errors >= 2:   # 같은 오류 반복 — 접근을 바꾸게 한다
+            err = (f"※ 같은 오류가 {session.errors}번 연속 났습니다. 같은 방식의 수정을 반복하지 말고 접근을 바꾸세요 "
+                   "(데이터를 load_ref 로 다시 불러 처음부터, 문제 열을 문자열 · 날짜형으로 바꾸기, 더 단순한 차트).\n\n" + err)
+        parts.append("[error]\n" + err)
     if artifacts:
         parts.append("[결과물] 아래 태그를 답변에 그대로 넣으면 화면에 보입니다\n" + "\n".join(f"[ARTIFACT:{a}]" for a in artifacts))
     return "\n\n".join(parts) or "(출력 없음 — 확인할 값은 print 하세요)"
@@ -204,9 +241,18 @@ async def run_python(code: str, session_id: str = "") -> str:
     언제 사용: 계산 · 통계 · 데이터 가공, 기본 차트 카드에 없는 형태의 차트(이동평균, 설비 간 차이, 분포 등).
     사용 가능: pandas, numpy, plotly, matplotlib
     도우미 함수:
-      - load_ref(data_ref) → 다른 tool 결과의 data_ref 데이터를 DataFrame(x, series, value)으로
+      - load_ref(data_ref) → 다른 tool 결과의 data_ref 데이터를 DataFrame 으로
+          'dr_...' (큰 결과 보관): 원본 표 그대로 — 열 이름 · 타입은 그 tool 결과 요약에 적힌 대로
+          차트 형식 data_ref     : long 형식 (x, series, value)
       - save_html(fig, "제목") → plotly Figure 를 대화형 차트 결과물로 저장 ([ARTIFACT:id] 생성)
-    자주 쓰는 패턴 (load_ref 결과는 long 형식: x, series, value):
+      - trend_chart(df, "date", ["utilization_pct", "oee_pct"], by="eqp_id", freq="MS") → 추이(Trend) 차트
+          월(MS) · 주(W) · 일(D) 단위로 묶어 지표마다 서브플롯 + 구간별 값 표 print. 추이 · Trend 질문은 직접 그리지 말고 이것을 쓴다
+    큰 결과(dr_...) 패턴:
+      df = load_ref("dr_...")
+      df.groupby("eqp_id")["utilization_pct"].mean().sort_values().round(1)   # 집계 결과만 print — 원본 행을 통째로 출력하지 않는다
+      월별 · 주별 차트: trend_chart(df, "date", "utilization_pct", by="eqp_id", freq="MS")   # 직접 그릴 때는 pd.Grouper(freq="MS")
+    실패하면: 커널 변수가 앞선 실행에서 이미 바뀌었을 수 있다 — df = load_ref(...) 로 다시 불러 처음부터
+    차트 형식 패턴 (long 형식: x, series, value):
       df = load_ref(ref).sort_values("x")
       df["ma"] = (df.set_index("x").groupby("series")["value"]
                   .transform(lambda s: s.rolling("7D").mean()).values)   # "7일" 은 시간 창 — rolling(7) 은 7개 점

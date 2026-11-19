@@ -9,3 +9,4 @@ httpx==0.28.1
 pyyaml==6.0.3
 mcp==1.30.0
 langchain-mcp-adapters==0.1.14  # 0.2.x 는 langchain-core 1.x 필요
+# boto3            # STORAGE=s3 (사내 S3) 일 때만 필요

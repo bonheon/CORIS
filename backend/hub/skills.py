@@ -107,6 +107,8 @@ def _load(path: Path) -> Optional[dict]:
         "owner": owner,
         "owner_name": str(meta.get("owner_name") or owner or ""),
         "extra": {k: v for k, v in meta.items() if k not in _KNOWN},
+        "inputs": list(meta.get("inputs") or []),   # 단계 실행 입력값 (extra 에도 그대로 있다)
+        "steps": list(meta.get("steps") or []),     # 단계 정의 — 있으면 단계 실행 엔진(hub/steps.py)이 실행
         "instructions": body.strip(),
         "uses": st.get("uses", 0),
         "created_at": st.get("created_at") or updated,
@@ -149,15 +151,22 @@ def get_item(skill_id: Optional[str]) -> Optional[dict]:
 
 def save(skill_id: Optional[str], name: str, description: str, tools: list[str], instructions: str,
          tags: Optional[list[str]] = None, visibility: Optional[str] = None,
-         owner: Optional[str] = None, owner_name: Optional[str] = None, extra: Optional[dict] = None) -> dict:
-    """skill_id 가 없으면 새로 만든다. 고칠 때 넘기지 않은 값(tags · visibility · owner)은 기존 값을 유지한다."""
+         owner: Optional[str] = None, owner_name: Optional[str] = None, extra: Optional[dict] = None,
+         structure: Optional[dict] = None) -> dict:
+    """skill_id 가 없으면 새로 만든다. 고칠 때 넘기지 않은 값(tags · visibility · owner)은 기존 값을 유지한다.
+    structure = {"inputs": [...], "steps": [...]} — 화면의 단계 편집기에서 온 값. None 이면 기존 단계 정의를 그대로 둔다."""
     with _lock:
         new = skill_id is None
         skill_id = skill_id or store.new_id("sk")
         if not _ID_RE.match(skill_id):
             raise ValueError(f"잘못된 skill id: {skill_id}")
         old = None if new else get_item(skill_id)
-        extra = old["extra"] if old else extra
+        extra = dict(old["extra"] if old else extra or {})
+        for key, val in (structure or {}).items():   # 빈 목록이면 키를 지운다 (단계 없는 프롬프트 skill 로)
+            if val:
+                extra[key] = val
+            else:
+                extra.pop(key, None)
         if old:
             tags = old["tags"] if tags is None else tags
             visibility = visibility or old["visibility"]

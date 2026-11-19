@@ -1,46 +1,19 @@
-import React, { KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
-import { Copy, Info, Play, Plus, X } from "lucide-react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { Copy, Info, Play, Plus } from "lucide-react";
+import TagInput from "../components/TagInput";
+import StepEditor from "../components/StepEditor";
 import { api, Skill, SkillInput } from "../api";
 import { useHub } from "../hub";
 import { skillDraft } from "../lib/draft";
 
-const EMPTY: SkillInput = { name: "", description: "", tools: [], instructions: "", tags: [] };
+const EMPTY: SkillInput = { name: "", description: "", tools: [], instructions: "", tags: [], inputs: [], steps: [] };
 
 // 목록 필터 — 관리자는 다른 사용자의 '내 스킬' 도 본다
 type Filter = "all" | "mine" | "official" | "others";
 
 const toInput = (s: Skill): SkillInput =>
-  ({ name: s.name, description: s.description, tools: s.tools, instructions: s.instructions, tags: s.tags, visibility: s.visibility });
-
-/** 태그 자유 입력 — Enter · 쉼표로 추가, × 로 삭제. 기존 태그를 추천 목록으로 */
-function TagInput({ value, onChange, suggestions, disabled }: {
-  value: string[]; onChange: (v: string[]) => void; suggestions: string[]; disabled?: boolean;
-}) {
-  const [text, setText] = useState("");
-  const add = (raw: string) => {
-    const t = raw.trim().replace(/,$/, "").trim();
-    if (t && !value.includes(t)) onChange([...value, t]);
-    setText("");
-  };
-  const onKey = (e: KeyboardEvent<HTMLInputElement>) => {
-    if ((e.key === "Enter" || e.key === ",") && !e.nativeEvent.isComposing) { e.preventDefault(); add(text); }
-    if (e.key === "Backspace" && !text && value.length) onChange(value.slice(0, -1));
-  };
-  return (
-    <div className={`tag-input ${disabled ? "off" : ""}`}>
-      {value.map((t) => (
-        <span key={t} className="tag ok">{t}{!disabled && <button onClick={() => onChange(value.filter((x) => x !== t))} aria-label={`${t} 삭제`}><X size={10} /></button>}</span>
-      ))}
-      {!disabled && (
-        <>
-          <input value={text} list="skill-tag-list" onChange={(e) => setText(e.target.value)} onKeyDown={onKey}
-            onBlur={() => text.trim() && add(text)} placeholder={value.length ? "" : "예) 공정, Lot 기준 — Enter 로 추가"} />
-          <datalist id="skill-tag-list">{suggestions.filter((s) => !value.includes(s)).map((s) => <option key={s} value={s} />)}</datalist>
-        </>
-      )}
-    </div>
-  );
-}
+  ({ name: s.name, description: s.description, tools: s.tools, instructions: s.instructions, tags: s.tags, visibility: s.visibility,
+     inputs: s.inputs ?? [], steps: s.steps ?? [] });
 
 export default function SkillsPage({ selected, navigate }: { selected?: string; navigate: (p: string, replace?: boolean) => void }) {
   const { meta, me, skills, refreshSkills, startChat, toast } = useHub();
@@ -96,11 +69,14 @@ export default function SkillsPage({ selected, navigate }: { selected?: string; 
 
   const save = async () => {
     if (!form.name.trim()) return setErr("이름을 입력하세요");
-    if (!form.tools.length) return setErr("tool을 1개 이상 선택하세요");
+    // 조회 단계에서 쓰는 tool 은 필수 tool 에 자동으로 넣는다 (agent 가 그 tool 을 쓸 수 있어야 실행된다)
+    const stepTools = (form.steps ?? []).filter((x) => x.type === "data" && x.tool).map((x) => x.tool as string);
+    const body: SkillInput = { ...form, tools: Array.from(new Set([...form.tools, ...stepTools])) };
+    if (!body.tools.length) return setErr("tool을 1개 이상 선택하세요");
     setSaving(true);
     setErr(null);
     try {
-      const saved = isNew ? await api.createSkill(form) : await api.updateSkill(selected!, form);
+      const saved = isNew ? await api.createSkill(body) : await api.updateSkill(selected!, body);
       await refreshSkills();
       toast(isNew && saved.visibility === "private" ? "내 스킬로 저장했습니다 — 나만 볼 수 있습니다" : "스킬을 저장했습니다");
       if (isNew) navigate(`/skills/${saved.id}`, true);
@@ -166,6 +142,7 @@ export default function SkillsPage({ selected, navigate }: { selected?: string; 
                   <b>{s.name}</b>
                   <small className="sk-meta">
                     {badge(s)}
+                    {!!s.steps?.length && <span className="tag lock">단계 {s.steps.length}</span>}
                     {s.tags.slice(0, 3).map((t) => <span key={t} className="sk-tag">{t}</span>)}
                     <span>· tool {s.tools.length}{s.uses ? ` · ${s.uses}회` : ""}</span>
                   </small>
@@ -226,7 +203,13 @@ export default function SkillsPage({ selected, navigate }: { selected?: string; 
                   </div>
 
                   <div className="field">
-                    <label>작업 지침<span>LLM에게 전달되는 절차</span></label>
+                    <div className="label">단계<span>선택 — 정의하면 LLM 대신 단계 실행 엔진이 순서대로 실행합니다 (조회 · 반복 · 표는 코드, 판단만 LLM)</span></div>
+                    <StepEditor steps={form.steps ?? []} inputs={form.inputs ?? []} tools={meta?.tools ?? []} disabled={!canEdit}
+                      onChange={(p) => setForm((f) => ({ ...f, ...p }))} />
+                  </div>
+
+                  <div className="field">
+                    <label>작업 지침<span>{(form.steps ?? []).length ? "단계형에서는 자유 양식 보고 단계가 '## 보고 양식' 을 참고합니다" : "LLM에게 전달되는 절차"}</span></label>
                     <textarea
                       className="textarea sk-instr"
                       // 내용 길이에 맞춰 늘어난다 (최소 18줄 · 최대 32줄, 그 이상은 칸 안에서 스크롤 · 아래 모서리로 직접 조절)
@@ -240,7 +223,9 @@ export default function SkillsPage({ selected, navigate }: { selected?: string; 
 
                   <div className="note">
                     <Info size={15} style={{ flexShrink: 0, marginTop: 2 }} />
-                    <div>이 스킬을 쓰는 동안 에이전트는 선택한 <b>tool {form.tools.length}개</b>만 볼 수 있습니다. 후보가 적을수록 tool을 잘못 고르는 일이 줄어듭니다.</div>
+                    {(form.steps ?? []).length
+                      ? <div><b>단계 {(form.steps ?? []).length}개</b>를 엔진이 순서대로 실행합니다. LLM 은 입력값 추출 · 판단 단계 · 자유 양식 보고에만 쓰여 빠르고, 표 · 수치는 매번 같습니다.</div>
+                      : <div>이 스킬을 쓰는 동안 에이전트는 선택한 <b>tool {form.tools.length}개</b>만 볼 수 있습니다. 후보가 적을수록 tool을 잘못 고르는 일이 줄어듭니다.</div>}
                   </div>
                   {err && <div className="note err" style={{ marginTop: 10 }}>{err}</div>}
                 </div>

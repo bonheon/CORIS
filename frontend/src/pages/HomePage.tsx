@@ -12,7 +12,7 @@ function greeting() {
   return h < 11 ? "좋은 아침입니다" : h < 18 ? "좋은 오후입니다" : "오늘도 수고하셨습니다";
 }
 
-// 홈 — 허브 현황(대화 · 스킬 · 이벤터 · MCP) + 빠른 시작. 업무 대시보드 카드는 필요해지면 여기에 추가한다.
+// 홈 — 허브 현황(대화 · 스킬 · 스케줄링 · MCP) + 빠른 시작. 업무 대시보드 카드는 필요해지면 여기에 추가한다.
 export default function HomePage({ navigate }: { navigate: (p: string) => void }) {
   const { meta, me, conversations, skills, events, startChat, refreshMeta } = useHub();
   const [agentId, setAgentId] = useState("auto");
@@ -56,9 +56,9 @@ export default function HomePage({ navigate }: { navigate: (p: string) => void }
                   <div className="d">누적 실행 {totalUses}회</div>
                 </div>
                 <div className="kpi">
-                  <small>이벤터</small>
+                  <small>스케줄링</small>
                   <b className="num">{activeEvents}<em>/ {events.length}</em></b>
-                  <div className="d">켜진 이벤터 / 전체</div>
+                  <div className="d">켜진 스케줄 / 전체</div>
                 </div>
                 <div className="kpi">
                   <small>MCP tool</small>
@@ -107,7 +107,7 @@ export default function HomePage({ navigate }: { navigate: (p: string) => void }
 
             <div>
               <div className="panel">
-                <div className="panel-h"><b>예정 이벤터</b><button className="link" onClick={() => navigate("/events")}>관리</button></div>
+                <div className="panel-h"><b>예정 스케줄</b><button className="link" onClick={() => navigate("/events")}>관리</button></div>
                 <div className="panel-b"><TodayEvents onOpen={() => navigate("/events")} /></div>
               </div>
               <div className="panel">

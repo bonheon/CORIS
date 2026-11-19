@@ -1,11 +1,11 @@
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from db import user_store
-from hub import catalog, mcp_registry, mcp_store, memory, routing, service, skills, store, uploads
+from hub import catalog, mcp_registry, mcp_store, memory, offload, routing, runs, service, skills, steps, store, tool_groups, uploads
 from hub.users import current_user
 
 router = APIRouter(prefix="/api/hub", tags=["hub"])
@@ -182,6 +182,18 @@ async def delete_mcp_server(server_id: str):
     return {"ok": True}
 
 
+# ── 보관된 tool 결과 (data_ref) ──────────────────────────────
+# 큰 tool 결과는 저장소에 보관되고 LLM 에는 요약 + data_ref 만 간다 (hub/offload.py).
+# code interpreter 커널의 load_ref("dr_...") 가 부른다 — 그 대화(세션)에서 만든 데이터만 내준다.
+
+@router.get("/data/{ref}")
+def get_data_ref(ref: str, x_coris_session: str = Header(default="")):
+    rec = _or_404(offload.load(ref), "data_ref")
+    if not x_coris_session or offload.session_key(x_coris_session) != rec["session"]:
+        raise HTTPException(403, "이 대화에서 만든 데이터가 아닙니다")
+    return rec
+
+
 # ── 첨부 이미지 ──────────────────────────────────────────────
 # 입력창에 붙여넣은(Ctrl+V) 이미지. multipart 의존성 없이 base64 JSON 으로 받는다.
 
@@ -255,7 +267,11 @@ def list_conversations(source: Optional[str] = None, limit: int = 50):
     if source:
         items = [c for c in items if c.get("source") == source]
     items.sort(key=lambda c: c["updated_at"], reverse=True)
-    return [service.conversation_head(c) for c in items[:limit]]
+    heads = [service.conversation_head(c) | {"status": "running" if runs.active(c["id"]) else "done"} for c in items[:limit]]
+    # 답변 중인 새 대화 — 아직 저장 전이라 목록에 없으므로 맨 위에 붙인다
+    known = {c["id"] for c in items}
+    fresh = [r.head() for r in runs.active_runs() if r.conv_id not in known and (not source or source == "chat")]
+    return fresh + heads
 
 
 @router.get("/conversations/{conv_id}")
@@ -263,6 +279,29 @@ def get_conversation(conv_id: str):
     conv = _or_404(store.get_item("conversations", conv_id), "conversation")
     # trace(tool 원본 결과)는 다음 턴 agent 입력용 — 화면에는 tools 요약만 내려보낸다
     return conv | {"messages": [{k: v for k, v in m.items() if k != "trace"} for m in conv["messages"]]}
+
+
+class ConversationPatch(BaseModel):
+    title: Optional[str] = Field(default=None, min_length=1, max_length=80)
+    favorite: Optional[bool] = None
+
+
+@router.patch("/conversations/{conv_id}")
+def patch_conversation(conv_id: str, body: ConversationPatch):
+    """이름 변경 · 즐겨찾기 켜고 끄기 (보낸 항목만 바꾼다)."""
+    conv = _or_404(store.get_item("conversations", conv_id), "conversation")
+    if body.title is not None:
+        conv["title"] = body.title.strip()
+    if body.favorite is not None:
+        conv["favorite"] = body.favorite
+    return service.conversation_head(store.upsert_item("conversations", conv))
+
+
+@router.delete("/conversations")
+def delete_all_conversations(source: Optional[str] = None):
+    """전체 삭제 — 즐겨찾기한 대화는 남긴다. source(chat | event)를 주면 그 종류만."""
+    n = store.delete_where("conversations", lambda c: not c.get("favorite") and (not source or c.get("source") == source))
+    return {"ok": True, "deleted": n}
 
 
 @router.delete("/conversations/{conv_id}")
@@ -281,6 +320,9 @@ class SkillIn(BaseModel):
     instructions: str = ""
     tags: list[str] = []
     visibility: Optional[str] = Field(default=None, pattern="^(official|private)$")  # 공식 지정은 관리자만
+    # 단계 실행 (선택) — None 이면 기존 정의 유지, [] 면 지움 (프롬프트 skill 로)
+    inputs: Optional[list[dict]] = None
+    steps: Optional[list[dict]] = None
 
 
 def _check_tools(names: list[str]) -> list[str]:
@@ -290,6 +332,18 @@ def _check_tools(names: list[str]) -> list[str]:
     if unknown:
         raise HTTPException(422, f"unknown tools: {', '.join(unknown)}")
     return names
+
+
+def _structure(body: SkillIn) -> Optional[dict]:
+    """단계 정의 검사 후 저장할 값 — 보내지 않았으면 None(기존 유지)."""
+    if body.inputs is None and body.steps is None:
+        return None
+    inputs, steps_ = body.inputs or [], body.steps or []
+    known = set(catalog.GROUPED_TOOLS) | set(catalog.TOOLS_BY_NAME)
+    errs = steps.validate(steps_, inputs, known)
+    if errs:
+        raise HTTPException(422, "단계 정의 오류 — " + " / ".join(errs[:6]))
+    return {"inputs": inputs, "steps": steps_}
 
 
 def _skill_for(skill_id: str, user: dict, edit: bool = False) -> dict:
@@ -317,17 +371,17 @@ def list_skills(user: dict = Depends(current_user)):
 def create_skill(body: SkillIn, user: dict = Depends(current_user)):
     """새 스킬은 기본이 '내 스킬'(나만 보임). 관리자는 바로 공식으로 만들 수 있다."""
     _check_tools(body.tools)
-    data = body.model_dump(exclude={"visibility"})
+    data = body.model_dump(exclude={"visibility", "inputs", "steps"})
     return skills.save(None, **data, visibility=_visibility(body, user, skills.PRIVATE),
-                       owner=user["user_id"], owner_name=user["name"])
+                       owner=user["user_id"], owner_name=user["name"], structure=_structure(body))
 
 
 @router.put("/skills/{skill_id}")
 def update_skill(skill_id: str, body: SkillIn, user: dict = Depends(current_user)):
     old = _skill_for(skill_id, user, edit=True)
     _check_tools(body.tools)
-    data = body.model_dump(exclude={"visibility"})
-    return skills.save(skill_id, **data, visibility=_visibility(body, user, old["visibility"]))
+    data = body.model_dump(exclude={"visibility", "inputs", "steps"})
+    return skills.save(skill_id, **data, visibility=_visibility(body, user, old["visibility"]), structure=_structure(body))
 
 
 @router.post("/skills/{skill_id}/copy")
@@ -398,10 +452,95 @@ def toggle_event(event_id: str, body: EventPatch):
 def delete_event(event_id: str):
     if not store.delete_item("events", event_id):
         raise HTTPException(404, "event not found")
+    service.cancel_event_tasks(event_id)   # 대기 중이던 작업은 취소 (실행 중인 것은 끝까지 간다)
     return {"ok": True}
 
 
 @router.post("/events/{event_id}/run")
-async def run_event(event_id: str):
+def run_event(event_id: str):
+    """지금 실행 — 바로 돌리지 않고 작업 큐에 넣는다. 결과는 GET /tasks 로 확인."""
     _or_404(store.get_item("events", event_id), "event")
-    return await service.run_event(event_id)
+    return service.enqueue(event_id, "manual")
+
+
+# ── 작업 큐 (task table) ─────────────────────────────────────
+
+@router.get("/tasks")
+def list_tasks(event_id: Optional[str] = None, status: Optional[str] = None, limit: int = 50):
+    """최근 task (새것 먼저). status 는 쉼표로 여러 개 — queued,running,done,error,canceled"""
+    return service.list_tasks(event_id, status, min(limit, 500))
+
+
+@router.get("/tasks/{task_id}")
+def get_task(task_id: str):
+    return service.task_view(_or_404(store.get_item("tasks", task_id), "task"))
+
+
+@router.post("/tasks/{task_id}/cancel")
+def cancel_task(task_id: str):
+    try:
+        return service.cancel_task(task_id)
+    except KeyError as e:
+        raise HTTPException(404, "task not found") from e
+    except ValueError as e:
+        raise HTTPException(409, str(e)) from e
+
+
+@router.post("/tasks/{task_id}/retry")
+def retry_task(task_id: str):
+    try:
+        return service.retry_task(task_id)
+    except KeyError as e:
+        raise HTTPException(404, "task not found") from e
+    except ValueError as e:
+        raise HTTPException(409, str(e)) from e
+
+
+# ── tool 그룹 (그룹 메뉴) ─────────────────────────────────────
+# MCP 서버와 상관없이 tool 을 골라 묶고, 그룹마다 업무 영역 태그를 단다. 저장하면 바로 반영(재시작 불필요).
+
+class ToolGroupIn(BaseModel):
+    name: str = Field(min_length=1, max_length=40)
+    description: str = Field(default="", max_length=200)
+    tags: list[str] = []
+    tools: list[str] = []
+    default_on: bool = True    # 켜면 질문마다 LLM 이 이 그룹 tool 을 본다
+    enabled: bool = True
+
+
+def _group_body(body: ToolGroupIn) -> dict:
+    if not body.tools:
+        raise HTTPException(422, "tool 을 1개 이상 넣으세요")
+    _ui_selected(body.tools)
+    _check_tools(body.tools)
+    return body.model_dump()
+
+
+@router.get("/tool-groups")
+def list_tool_groups():
+    return tool_groups.list_items()
+
+
+@router.post("/tool-groups")
+def create_tool_group(body: ToolGroupIn, user: dict = Depends(current_user)):
+    rec = tool_groups.save(None, _group_body(body), user["user_id"])
+    catalog.rebuild()
+    return rec
+
+
+@router.put("/tool-groups/{group_id}")
+def update_tool_group(group_id: str, body: ToolGroupIn):
+    try:
+        rec = tool_groups.save(group_id, _group_body(body))
+    except KeyError as e:
+        raise HTTPException(404, "tool group not found") from e
+    catalog.rebuild()
+    return rec
+
+
+@router.delete("/tool-groups/{group_id}")
+def delete_tool_group(group_id: str):
+    if not tool_groups.delete(group_id):
+        raise HTTPException(404, "tool group not found")
+    catalog.rebuild()
+    return {"ok": True}

@@ -23,9 +23,26 @@ interface HubState {
   /** startChat 호출마다 증가 — 이미 /new 에 있어도 채팅 화면이 반응하도록 */
   pendingTick: number;
   toast: (msg: string) => void;
+  /** 답변 완료 표시 — 내가 보지 않는 사이 끝난 답변이면 true. 대화를 열면 markSeen 으로 지운다 */
+  isUnread: (c: ConvHead) => boolean;
+  markSeen: (id: string) => void;
 }
 
 const Ctx = createContext<HubState | null>(null);
+
+// 대화별로 마지막으로 본 시각 — 브라우저에 기억한다. 처음 쓰는 브라우저는 그 시각 이전 대화를 모두 본 것으로 친다
+const SEEN_KEY = "coris.seen";
+function loadSeen(): { since: string; at: Record<string, string> } {
+  try {
+    const v = JSON.parse(localStorage.getItem(SEEN_KEY) || "null");
+    if (v && typeof v.since === "string") return v;
+  } catch {}
+  const fresh = { since: new Date().toISOString(), at: {} };
+  try { localStorage.setItem(SEEN_KEY, JSON.stringify(fresh)); } catch {}
+  return fresh;
+}
+// 서버 시각(updated_at)은 초 단위 로컬 시각 문자열 — 비교용으로 Date 로 바꾼다
+const ts = (s?: string) => (s ? new Date(s).getTime() : 0);
 
 export function useHub(): HubState {
   const v = useContext(Ctx);
@@ -41,6 +58,7 @@ export function HubProvider({ children, navigate }: { children: React.ReactNode;
   const [events, setEvents] = useState<HubEvent[]>([]);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const pending = useRef<PendingChat | null>(null);
+  const [seen, setSeen] = useState(loadSeen);
   const [pendingTick, setPendingTick] = useState(0);
 
   const refreshMeta = useCallback(async () => { setMeta(await api.meta()); }, []);
@@ -56,6 +74,21 @@ export function HubProvider({ children, navigate }: { children: React.ReactNode;
     refreshSkills().catch(() => {});
     refreshEvents().catch(() => {});
   }, [refreshMe, refreshConversations, refreshSkills, refreshEvents]);
+
+  // 답변 중인 대화가 있으면 목록을 자주 새로 고친다 — '답변 중' → '답변 완료' 전환이 바로 보이게
+  useEffect(() => {
+    if (!conversations.some((c) => c.status === "running")) return;
+    const t = window.setTimeout(() => { refreshConversations().catch(() => {}); }, 2000);
+    return () => window.clearTimeout(t);
+  }, [conversations, refreshConversations]);
+
+  const markSeen = useCallback((id: string) => {
+    setSeen((v) => {
+      const next = { ...v, at: { ...v.at, [id]: new Date().toISOString() } };
+      try { localStorage.setItem(SEEN_KEY, JSON.stringify(next)); } catch {}
+      return next;
+    });
+  }, []);
 
   const toast = useCallback((msg: string) => {
     setToastMsg(msg);
@@ -74,8 +107,10 @@ export function HubProvider({ children, navigate }: { children: React.ReactNode;
       takePending: () => { const p = pending.current; pending.current = null; return p; },
       pendingTick,
       toast,
+      isUnread: (c) => c.status !== "running" && ts(c.updated_at) > Math.max(ts(seen.since), ts(seen.at[c.id])),
+      markSeen,
     };
-  }, [meta, me, refreshMe, conversations, skills, events, refreshMeta, refreshConversations, refreshSkills, refreshEvents, navigate, toast, pendingTick]);
+  }, [meta, me, refreshMe, conversations, skills, events, refreshMeta, refreshConversations, refreshSkills, refreshEvents, navigate, toast, pendingTick, seen, markSeen]);
 
   return (
     <Ctx.Provider value={value}>

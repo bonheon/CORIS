@@ -17,6 +17,7 @@ import logging
 import math
 import os
 import random
+from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Literal
 from urllib.parse import urlencode
@@ -46,6 +47,90 @@ def _search(keyword: str) -> list[dict]:
 
 def _dump(obj) -> str:
     return json.dumps(obj, ensure_ascii=False)
+
+
+# ── 지식 문서 (Ceeria 용 Mock) ────────────────────────────────
+# 실제로는 Ceeria 지식 검색(벡터 검색)을 MCP tool 로 노출한다. 여기서는 docs/ 의 md 문서 + 아래 Mock 문서를
+# 제목(#, ##) 단위로 잘라 키워드 겹침으로 찾는다 — 결과 형식(문서 id · 섹션 · 본문 조각 · 출처)만 실제와 맞춘다.
+DOCS_DIR = Path(__file__).resolve().parents[2] / "docs"
+MOCK_DOCS = {
+    "KB-CC-001_Hold_처리_기준(Mock)": """# Hold 처리 기준 (Mock)
+## Hold 유형
+- 품질 Hold: CD · 막 두께 · 파티클 등 계측 규격 이탈. 해제 전 재측정 결과 확인 필수.
+- 설비 Hold: 진행 중 설비 알람 발생. 설비 엔지니어 확인 후 해제.
+- 정보 Hold: Recipe 불일치 · 이력 누락. 공정 엔지니어가 이력 보정 후 해제.
+## 해제 절차
+1. Hold 사유와 발생 step 확인
+2. 같은 설비 · 같은 시간대 다른 Lot 영향 여부 확인
+3. 재측정 또는 설비 점검 결과 첨부 후 해제 요청
+## 처리 기한
+- Hold 24시간 초과 시 팀장 보고, 48시간 초과 시 품질 회의 안건""",
+    "KB-CC-002_설비_PM_BM_정의(Mock)": """# 설비 PM · BM 정의 (Mock)
+## 용어
+- PM(Preventive Maintenance): 정기 보전. 계획된 비가동.
+- BM(Breakdown Maintenance): 고장 보전. 계획되지 않은 비가동.
+- 가용률 = (24h - PM - BM) / 24h, 가동률 = 가동 시간 / 24h
+## BM 대응
+- BM 4시간 초과 시 대체 설비로 Lot 분산, 대기 시간 모니터링
+- 같은 설비 BM 주 2회 이상이면 근본 원인 분석(RCA) 대상""",
+    "KB-CC-003_Recipe_변경_관리(Mock)": """# Recipe 변경 관리 (Mock)
+## 변경 절차
+- Recipe 변경은 변경 요청서 승인 후 적용. 적용 전 Pilot Lot 1개로 검증.
+## Recipe 불일치 Hold
+- Lot 이력의 Recipe 버전과 설비 Recipe 버전이 다르면 정보 Hold. 버전 확인 후 재투입 여부 결정.""",
+}
+
+
+def _chunks() -> list[dict]:
+    """문서 → 섹션 조각 [{doc_id, title, section, text}]. 제목(#, ##) 단위."""
+    docs = dict(MOCK_DOCS)
+    for f in sorted(DOCS_DIR.rglob("*.md")) if DOCS_DIR.exists() else []:
+        docs[f.stem] = f.read_text(encoding="utf-8")
+    out = []
+    for doc_id, text in docs.items():
+        title, section, buf = doc_id, "", []
+        for line in text.splitlines():
+            if line.startswith("# "):
+                title = line[2:].strip()
+                continue
+            if line.startswith("## "):
+                if buf:
+                    out.append({"doc_id": doc_id, "title": title, "section": section, "text": "\n".join(buf).strip()})
+                section, buf = line[3:].strip(), []
+                continue
+            buf.append(line)
+        if buf:
+            out.append({"doc_id": doc_id, "title": title, "section": section, "text": "\n".join(buf).strip()})
+    return [c for c in out if c["text"]]
+
+
+CHUNKS = _chunks()
+
+
+@mcp.tool(structured_output=False)
+def search_knowledge(query: str, top_k: int = 4) -> str:
+    """사내 지식 문서(C/C 기준 · SOP · 용어 정의 · 처리 절차)에서 관련 조각을 찾는다 — 출처(문서 id · 섹션) 포함.
+
+    언제 사용: 기준 · 절차 · 정의 · 규정 · '어떻게 처리해?' 같은 지식 질문, 판단 근거가 필요한 질문.
+    답변에는 반드시 출처(문서 id · 섹션)를 함께 적는다. 결과에 없는 내용은 지어내지 않는다.
+
+    Args:
+        query: 검색어 (질문 그대로 또는 핵심 키워드)
+        top_k: 돌려줄 조각 수 (기본 4)
+    """
+    words = [w for w in query.replace("?", " ").split() if len(w) >= 2]
+    scored = []
+    for c in CHUNKS:
+        hay = (c["title"] + " " + c["section"] + " " + c["text"]).lower()
+        score = sum(hay.count(w.lower()) for w in words)
+        if score:
+            scored.append((score, c))
+    scored.sort(key=lambda x: -x[0])
+    hits = [c | {"score": sc} for sc, c in scored[:max(1, min(int(top_k), 8))]]
+    return _dump({
+        "summary": f"지식 문서 검색 '{query}' — {len(hits)}건" if hits else f"지식 문서 검색 '{query}' — 관련 문서 없음",
+        "results": hits,
+    })
 
 
 # ── LLM 용 ────────────────────────────────────────────────────
