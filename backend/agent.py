@@ -29,7 +29,7 @@ from langgraph.prebuilt import ToolNode, tools_condition
 
 from hub.catalog import AGENTS_BY_ID, TOOLS_BY_NAME
 from hub.llm import chat_model
-from hub import catalog, routing, skills, store
+from hub import catalog, routing, skills, store, steps
 from hub.routing import Plan
 
 MODEL = os.getenv("AGENT_MODEL", "gpt-4o")
@@ -240,6 +240,12 @@ async def stream(messages: list[dict], plan: Plan, skill: Optional[dict],
     {"type": "tool_end", "id", "name", "ms", "ok"}
     {"type": "trace", "trace": [...]}   마지막 1회 — 저장해 두었다가 다음 턴 messages 에 붙여 넘긴다
     """
+    # 단계가 정의된 skill — 단계 실행 엔진이 정해진 순서로 실행한다 (LLM 은 판단 · 보고만)
+    if steps.has_steps(skill):
+        async for ev in steps.run(messages, skill, session_id):
+            yield ev
+        return
+
     graph = _get_graph(plan.tools)
     started: dict[str, float] = {}
     inputs = to_lc_messages(build_prompt(plan, skill, user_memory), messages, with_trace=bool(plan.tools))

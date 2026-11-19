@@ -7,8 +7,10 @@ export type Route =
   | { page: "chat"; id: string }
   | { page: "skills"; id?: string }
   | { page: "events" }
+  | { page: "tasks" }
   | { page: "portals" }
   | { page: "mcp"; id?: string }
+  | { page: "groups"; id?: string }
   | { page: "me" };
 
 function parse(hash: string): Route {
@@ -17,8 +19,10 @@ function parse(hash: string): Route {
   if (a === "c" && b) return { page: "chat", id: b };
   if (a === "skills") return { page: "skills", id: b };
   if (a === "events") return { page: "events" };
+  if (a === "tasks") return { page: "tasks" };
   if (a === "portals") return { page: "portals" };
   if (a === "mcp") return { page: "mcp", id: b };
+  if (a === "groups") return { page: "groups", id: b };
   if (a === "me") return { page: "me" };
   return { page: "home" };
 }

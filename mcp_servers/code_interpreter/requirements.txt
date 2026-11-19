@@ -1,0 +1,10 @@
+# code interpreter MCP 서버 전용 venv (Python 3.10+)
+#   python -m venv .venv && .venv/bin/pip install -r requirements.txt
+mcp==1.30.0
+anyio==4.15.1
+jupyter_client==8.10.0
+ipykernel==7.3.0
+pandas==2.3.3
+numpy==2.2.6
+plotly==7.1.0
+matplotlib==3.10.9

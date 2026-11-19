@@ -13,23 +13,27 @@ POST /api/chat — SSE 스트리밍.
   {"type": "suggestions", "items"}             답변 후 추천 후속 질문 (없으면 보내지 않음)
   {"type": "error", "message"}
   [DONE]
+  {"type": "stopped"}                          사용자가 중지함 (그때까지의 답변은 저장)
 응답이 끝나면 대화가 hub 저장소에 기록되고, 사용자 메모리(md)가 백그라운드로 갱신된다.
+답변은 백그라운드 작업(hub/runs.py)이라 화면 연결이 끊겨도 계속된다 — GET /api/chat/{id}/stream 으로 다시 연결,
+POST /api/chat/{id}/cancel 로 중지.
 
 프론트는 텍스트만 보내므로, 저장된 대화에서 같은 답변을 찾아 그 턴의 tool 호출 · 결과(trace)를
 붙여 agent 에 넘긴다 — 후속 질문에서 앞서 조회한 데이터를 그대로 쓰게 하기 위함.
 """
+import asyncio
 import json
 import logging
 from datetime import date
 from typing import Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 import agent
 from db import user_store
-from hub import memory, service, skills, store, suggest, vision
+from hub import memory, runs, service, skills, store, suggest, uploads, vision
 from hub.users import current_user
 from hub.routing import ToolSelection, resolve
 
@@ -91,6 +95,7 @@ async def chat(req: ChatRequest, user: dict = Depends(current_user)):
         plan = None
         attachments: list[dict] = []
         suggestions: list[str] = []
+        stopped = False
         try:
             prepared = messages
             async for ev in vision.prepare(messages):  # 첨부 이미지 → VLM 해석 (진행은 tool 처럼 보인다)
@@ -124,12 +129,16 @@ async def chat(req: ChatRequest, user: dict = Depends(current_user)):
             suggestions = await suggest.generate(user_text, "".join(text), plan.tools)
             if suggestions:
                 yield _sse({"type": "suggestions", "items": suggestions})
+        except asyncio.CancelledError:   # 사용자가 중지 (POST /api/chat/{id}/cancel) — 그때까지의 답변은 저장
+            stopped = True
+            raise
         except Exception as e:  # noqa: BLE001
             log.exception("chat failed")
             yield _sse({"type": "error", "message": str(e)[:300]})
         finally:
             if text or runs:
-                service.save_turn(conv_id, user_text, "".join(text), list(runs.values()),
+                body = "".join(text) + ("\n\n_(중지됨)_" if stopped and text else "(중지됨)" if stopped else "")
+                service.save_turn(conv_id, user_text, body, list(runs.values()),
                                   req.agent_id, skill["id"] if skill else None, routed_agent=plan.agent_id if plan else None,
                                   routed_skill=plan.skill_id if plan else None,
                                   route=plan.summary() if plan else None, user_id=user["user_id"], trace=trace,
@@ -137,8 +146,44 @@ async def chat(req: ChatRequest, user: dict = Depends(current_user)):
                 memory.schedule_update(user, user_text, "".join(text), list(runs.values()), date.today().isoformat())
         yield "data: [DONE]\n\n"
 
-    # 프록시가 SSE 를 모아서 보내지 않게 — CRA 개발 서버의 gzip 은 no-transform 을, nginx 는 X-Accel-Buffering 을 본다
-    return StreamingResponse(generate(), media_type="text/event-stream", headers={
+    # 답변은 백그라운드 작업으로 — 화면이 연결을 끊어도(다른 대화로 이동) 끝까지 만들어 저장한다 (hub/runs.py)
+    if runs.active(conv_id):
+        raise HTTPException(409, "이 대화는 아직 답변 중입니다")
+    last = next((m for m in reversed(messages) if m["role"] == "user"), {})
+    att = [uploads.public(u) for u in (uploads.get(i) for i in last.get("attachments") or []) if u]
+    run = runs.start(runs.Run(conv_id, user["user_id"], user_text, att, is_new=conv is None), generate())
+    return _stream(run.subscribe())
+
+
+# 프록시가 SSE 를 모아서 보내지 않게 — CRA 개발 서버의 gzip 은 no-transform 을, nginx 는 X-Accel-Buffering 을 본다
+def _stream(body) -> StreamingResponse:
+    return StreamingResponse(body, media_type="text/event-stream", headers={
         "Cache-Control": "no-cache, no-transform",
         "X-Accel-Buffering": "no",
     })
+
+
+@router.get("/chat/{conv_id}/stream")
+async def resume(conv_id: str, user: dict = Depends(current_user)):
+    """진행 중(또는 방금 끝난) 답변에 다시 연결 — 처음부터 다시 받는다. 첫 이벤트 resume 에 이번 턴의 질문이 온다."""
+    run = runs.get(conv_id)
+    if run is None or run.user_id != user["user_id"]:
+        raise HTTPException(404, "진행 중인 답변이 없습니다")
+
+    async def body():
+        yield _sse({"type": "resume", "user_text": run.user_text, "attachments": run.attachments,
+                    "started_at": run.started_at, "done": run.done})
+        async for chunk in run.subscribe():
+            yield chunk
+
+    return _stream(body())
+
+
+@router.post("/chat/{conv_id}/cancel")
+async def cancel(conv_id: str, user: dict = Depends(current_user)):
+    """중지 — 그때까지 만든 답변은 저장된다."""
+    run = runs.active(conv_id)
+    if run is None or run.user_id != user["user_id"]:
+        raise HTTPException(404, "진행 중인 답변이 없습니다")
+    runs.cancel(conv_id)
+    return {"ok": True}

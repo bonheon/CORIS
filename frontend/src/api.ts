@@ -5,7 +5,18 @@ export interface Agent {
   tools: string[];               // 허용 범위 (allowed_groups 의 tool 전체)
   allowed_groups: string[]; default_groups: string[];
 }
-export interface ToolGroup { id: string; name: string; description: string; tools: string[]; tags?: string[]; imported?: boolean }
+export interface ToolGroup {
+  id: string; name: string; description: string; tools: string[]; tags?: string[];
+  imported?: boolean;   // 화면에서 만든 그룹 (MCP 서버 · 그룹 메뉴)
+  custom?: boolean;     // 그룹 메뉴에서 만든 그룹 — 서버 상관없이 tool 을 묶음
+  server?: string; default_on?: boolean;
+}
+/** 그룹 메뉴에서 만든 tool 그룹 — GET /api/hub/tool-groups */
+export interface ToolGroupRec {
+  id: string; name: string; description: string; tags: string[]; tools: string[];
+  default_on: boolean; enabled: boolean; owner: string | null; created_at: string; updated_at: string;
+}
+export type ToolGroupInput = Pick<ToolGroupRec, "name" | "description" | "tags" | "tools" | "default_on" | "enabled">;
 export interface ToolInfo {
   name: string; label: string; category: string; description: string;
   group: string | null; available: boolean; server: string | null;
@@ -75,6 +86,8 @@ export interface ConvHead {
   id: string; title: string; source: "chat" | "event"; event_id: string | null;
   agent_id: string; skill_id: string | null; skill_ids?: string[]; summary: string;
   created_at: string; updated_at: string; turns: number;
+  favorite?: boolean;   // 즐겨찾기 — 전체 삭제에서 빠진다
+  status?: "running" | "done";   // running = 지금 답변을 만드는 중 (화면을 떠나도 계속된다)
 }
 export interface Conversation extends Omit<ConvHead, "turns"> { messages: StoredMessage[] }
 
@@ -84,20 +97,47 @@ export interface Skill {
   visibility: "official" | "private";   // 공식(모두) | 내 스킬(만든 사람 · 관리자)
   owner: string | null; owner_name: string;
   uses: number; created_at: string; updated_at: string;
+  inputs?: StepInputDef[];   // 단계 실행 입력값
+  steps?: StepDef[];         // 단계 정의 — 있으면 단계 실행 엔진이 순서대로 실행 (LLM 은 판단 · 보고만)
 }
 export type SkillVisibility = "official" | "private";
-export type SkillInput = Pick<Skill, "name" | "description" | "tools" | "instructions" | "tags"> & { visibility?: SkillVisibility };
+export type SkillInput = Pick<Skill, "name" | "description" | "tools" | "instructions" | "tags"> & {
+  visibility?: SkillVisibility; inputs?: StepInputDef[]; steps?: StepDef[];
+};
+
+/** 단계 실행 (hub/steps.py) — SKILL.md 의 inputs · steps 와 같은 모양 */
+export interface StepInputDef { name: string; label?: string; required?: boolean; example?: string }
+export type StepType = "data" | "compute" | "condition" | "judge" | "report";
+export interface StepDef {
+  id: string; type: StepType; title?: string;
+  tool?: string; args?: Record<string, unknown>; for_each?: string;                 // data (for_each 는 compute table 도)
+  op?: "table" | "unique" | "filter"; columns?: Record<string, string>; of?: string; column?: string; equals?: string;   // compute
+  if?: string; then?: string; verdict?: string;                                     // condition
+  from?: string[]; prompt?: string; outputs?: string[]; criteria?: { verdict: string; when: string }[];   // judge
+  template?: string;                                                                // report
+  [k: string]: unknown;
+}
 
 export interface Schedule { kind: "daily" | "weekly"; time: string; weekday: number | null }
 export interface LastRun {
   at: string; status: "ok" | "error"; conversation_id: string | null;
-  summary: string; tool_count: number; elapsed_s: number;
+  summary: string; tool_count: number; elapsed_s: number; task_id?: string;
 }
 export interface HubEvent {
   id: string; name: string; schedule: Schedule; prompt: string; skill_id: string | null;
   agent_id: string; target: string; enabled: boolean; last_run: LastRun | null; next_run: string | null;
 }
 export type EventInput = Omit<HubEvent, "id" | "last_run" | "next_run">;
+
+/** 작업 큐(task table) — 스케줄 실행 1건. 한 번에 한 건씩, 넣은 순서대로 처리된다 */
+export type TaskStatus = "queued" | "running" | "done" | "error" | "canceled";
+export interface HubTask {
+  id: string; event_id: string; event_name: string; prompt: string; skill_id: string | null; agent_id: string;
+  trigger: "schedule" | "manual" | "retry"; status: TaskStatus; attempt: number; retry_of: string | null;
+  created_at: string; started_at: string | null; finished_at: string | null; elapsed_s: number | null;
+  routed_agent: string | null; conversation_id: string | null; tool_count: number; summary: string; error: string | null;
+  position: number | null;   // 대기 중일 때 차례 (1 = 다음)
+}
 
 async function req<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, {
@@ -135,6 +175,9 @@ export const api = {
   conversations: () => req<ConvHead[]>("/api/hub/conversations"),
   conversation: (id: string) => req<Conversation>(`/api/hub/conversations/${id}`),
   deleteConversation: (id: string) => req(`/api/hub/conversations/${id}`, { method: "DELETE" }),
+  patchConversation: (id: string, p: { title?: string; favorite?: boolean }) => req<ConvHead>(`/api/hub/conversations/${id}`, json("PATCH", p)),
+  deleteAllConversations: (source?: string) =>
+    req<{ ok: boolean; deleted: number }>(`/api/hub/conversations${source ? `?source=${source}` : ""}`, { method: "DELETE" }),
 
   skills: () => req<Skill[]>("/api/hub/skills"),
   createSkill: (s: SkillInput) => req<Skill>("/api/hub/skills", json("POST", s)),
@@ -147,7 +190,17 @@ export const api = {
   updateEvent: (id: string, e: EventInput) => req<HubEvent>(`/api/hub/events/${id}`, json("PUT", e)),
   toggleEvent: (id: string, enabled: boolean) => req<HubEvent>(`/api/hub/events/${id}`, json("PATCH", { enabled })),
   deleteEvent: (id: string) => req(`/api/hub/events/${id}`, { method: "DELETE" }),
-  runEvent: (id: string) => req<HubEvent>(`/api/hub/events/${id}/run`, { method: "POST" }),
+  runEvent: (id: string) => req<HubTask>(`/api/hub/events/${id}/run`, { method: "POST" }),
+
+  tasks: (p: { event_id?: string; status?: string; limit?: number } = {}) =>
+    req<HubTask[]>(`/api/hub/tasks?${new URLSearchParams(Object.entries(p).filter(([, v]) => v != null).map(([k, v]) => [k, String(v)]))}`),
+  cancelTask: (id: string) => req<HubTask>(`/api/hub/tasks/${id}/cancel`, { method: "POST" }),
+  retryTask: (id: string) => req<HubTask>(`/api/hub/tasks/${id}/retry`, { method: "POST" }),
+
+  toolGroups: () => req<ToolGroupRec[]>("/api/hub/tool-groups"),
+  createToolGroup: (g: ToolGroupInput) => req<ToolGroupRec>("/api/hub/tool-groups", json("POST", g)),
+  updateToolGroup: (id: string, g: ToolGroupInput) => req<ToolGroupRec>(`/api/hub/tool-groups/${id}`, json("PUT", g)),
+  deleteToolGroup: (id: string) => req(`/api/hub/tool-groups/${id}`, { method: "DELETE" }),
 };
 
 // ── 채팅 스트리밍 (SSE over fetch) ─────────────────────────────
@@ -168,6 +221,8 @@ export interface ChatHandlers {
   onToolEnd: (id: string, ms: number, ok: boolean) => void;
   onError: (message: string) => void;
   onSuggestions?: (items: string[]) => void;
+  onResume?: (info: { user_text: string; attachments: Attachment[]; started_at: string; done: boolean }) => void;
+  onStopped?: () => void;
 }
 
 export async function streamChat(body: ChatRequest, h: ChatHandlers, signal?: AbortSignal) {
@@ -177,9 +232,24 @@ export async function streamChat(body: ChatRequest, h: ChatHandlers, signal?: Ab
     body: JSON.stringify(body),
     signal,
   });
+  if (res.status === 409) throw new Error("이 대화는 아직 답변 중입니다");
   if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+  await readSSE(res, h);
+}
 
-  const reader = res.body.getReader();
+/** 진행 중(또는 방금 끝난) 답변에 다시 연결 — 처음부터 다시 받는다. 진행 중인 답변이 없으면 false */
+export async function resumeChat(convId: string, h: ChatHandlers, signal?: AbortSignal): Promise<boolean> {
+  const res = await fetch(`/api/chat/${convId}/stream`, { signal });
+  if (res.status === 404) return false;
+  if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+  await readSSE(res, h);
+  return true;
+}
+
+export const cancelChat = (convId: string) => fetch(`/api/chat/${convId}/cancel`, { method: "POST" });
+
+async function readSSE(res: Response, h: ChatHandlers) {
+  const reader = res.body!.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
   for (;;) {
@@ -203,6 +273,8 @@ export async function streamChat(body: ChatRequest, h: ChatHandlers, signal?: Ab
         case "tool_end": h.onToolEnd(ev.id, ev.ms, ev.ok); break;
         case "error": h.onError(ev.message); break;
         case "suggestions": h.onSuggestions?.(ev.items ?? []); break;
+        case "resume": h.onResume?.(ev); break;
+        case "stopped": h.onStopped?.(); break;
       }
     }
   }

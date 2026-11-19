@@ -45,7 +45,7 @@ export function EventStatus({ e }: { e: HubEvent }) {
 export function TodayEvents({ onOpen }: { onOpen?: (e: HubEvent) => void }) {
   const { events } = useHub();
   const list = todayEvents(events);
-  if (!list.length) return <div className="muted" style={{ fontSize: 12.5, padding: "4px 0" }}>24시간 안에 예정된 이벤터가 없습니다</div>;
+  if (!list.length) return <div className="muted" style={{ fontSize: 12.5, padding: "4px 0" }}>24시간 안에 예정된 스케줄이 없습니다</div>;
   return (
     <>
       {list.map((e) => (

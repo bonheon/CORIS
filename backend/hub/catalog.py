@@ -3,6 +3,7 @@ Hub 카탈로그 — tool 원천, tool 그룹, agent 정의, 포탈 목록.
 
 agent/group/표시명/포탈 정의는 catalog.yaml 에 있다 (기준: group = 데이터 영역, agent = 업무 방식).
 화면에서 등록한 MCP 서버(hub/mcp_store.py)는 서버 하나가 group 하나로 덧붙는다 (imported group).
+그룹 메뉴에서 만든 그룹(hub/tool_groups.py)도 imported group 으로 덧붙는다 (custom: true, 서버 상관없이 tool 을 묶음).
 agent 에 include_imported: true 가 있으면 imported group 을 허용 범위에 넣고,
 서버의 default_on 이 true 면 기본 group 에도 넣는다.
 
@@ -14,7 +15,7 @@ from pathlib import Path
 
 import yaml
 
-from hub import mcp_registry, mcp_store, session_tools
+from hub import mcp_registry, mcp_store, offload, session_tools, tool_groups
 
 log = logging.getLogger("catalog")
 
@@ -26,6 +27,7 @@ AUTO = "auto"
 # MCP 에서 받아온 tool — refresh() 전에는 비어 있다.
 # 서버 장애로 빠진 tool 은 여기 없으므로 routing 에서 자동으로 "unavailable" 이 된다.
 TOOLS_BY_NAME: dict = {}
+RAW_TOOLS: dict = {}   # 큰 결과 보관(offload)을 거치지 않은 tool — 단계 실행 엔진(hub/steps.py)이 원본 결과를 받는다
 VERSION = 0  # refresh 마다 증가 — agent 그래프 캐시 키에 포함해 낡은 tool 객체를 버린다
 
 def _load_catalog() -> tuple[list[dict], list[dict], set[str], dict[str, str], list[dict], list[str]]:
@@ -117,10 +119,22 @@ def _imported_groups() -> list[dict]:
     return [g for s in mcp_store.list_items() if s.get("enabled", True) for g in _server_groups(s)]
 
 
+def _custom_groups() -> list[dict]:
+    """그룹 메뉴에서 만든 그룹 — 서버와 상관없이 고른 tool 묶음. 화면 전용 tool 은 빼고, tool 이 없으면 건너뛴다."""
+    out = []
+    for g in tool_groups.list_items():
+        tools = [n for n in g.get("tools") or [] if n not in UI_TOOLS]
+        if g.get("enabled", True) and tools:
+            out.append({"id": g["id"], "name": g["name"], "description": g.get("description") or "",
+                        "tags": [str(t) for t in g.get("tags") or []], "tools": tools,
+                        "imported": True, "custom": True, "default_on": g.get("default_on", True)})
+    return out
+
+
 def rebuild() -> None:
     """group · 표시명을 다시 만든다 — 화면에서 MCP 서버를 등록 · 수정 · 삭제한 뒤 refresh() 가 부른다."""
     servers = mcp_store.list_items()
-    GROUPS[:] = _STATIC_GROUPS + _imported_groups()
+    GROUPS[:] = _STATIC_GROUPS + _custom_groups() + _imported_groups()
     GROUPS_BY_ID.clear()
     GROUPS_BY_ID.update({g["id"]: g for g in GROUPS})
     GROUPED_TOOLS[:] = list(dict.fromkeys(n for g in GROUPS for n in g["tools"]))
@@ -162,9 +176,13 @@ async def refresh() -> dict:
     global VERSION
     reload_yaml()
     rebuild()
-    tools = session_tools.wrap_all(await mcp_registry.load_tools(always_keep=UI_TOOLS))
+    # session_id 채우기 → 큰 결과 자동 보관(hub/offload.py) 순으로 감싼다. 화면 전용 tool 은 그대로
+    raw = session_tools.wrap_all(await mcp_registry.load_tools(always_keep=UI_TOOLS))
+    tools = offload.wrap_all(raw, skip=set(UI_TOOLS))
     TOOLS_BY_NAME.clear()
     TOOLS_BY_NAME.update(tools)
+    RAW_TOOLS.clear()
+    RAW_TOOLS.update(raw)
     VERSION += 1
     _check_tools()
     log.info("MCP tool %d개 로드 (%s)", len(tools),

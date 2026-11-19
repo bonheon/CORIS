@@ -37,6 +37,18 @@ groups:
     tags: [품질, 공정]
     tools: [get_insp_map]
 
+  - id: fab
+    name: FAB 이력 · 효율 (샘플)
+    description: Lot 공정 · 장비 진행 이력(Track In/Out · 대기 · Hold), 장비별 일 효율(가동률 · PM · BM 고장 · WPH · OEE) — mcp_servers/fab_sample
+    tags: [공정, 장비]
+    tools: [get_lot_history, get_eqp_efficiency]
+
+  - id: knowledge
+    name: 지식 문서 (예시)
+    description: C/C 기준 · SOP · 용어 정의 · 처리 절차 문서 검색 — 출처 포함 (Ceeria 지식 검색 자리, Mock)
+    tags: [공통]
+    tools: [search_knowledge]
+
   - id: code
     name: 코드 실행
     description: Python 으로 계산 · 가공 · 자유 형식 차트 (mcp_servers/code_interpreter)
@@ -54,24 +66,63 @@ tool_labels:
   get_metric_trend: 지표 추이
   get_insp_map: INSP Wafer Map
   run_python: Python 실행
+  get_lot_history: Lot 진행 이력
+  get_eqp_efficiency: 장비 일 효율
+  search_knowledge: 지식 문서 검색
 
 # include_imported: 화면에서 등록한 MCP 서버 group 을 허용 범위에 넣는다 (서버의 '기본으로 켜기' 면 기본 group 에도).
 # 첫 번째 agent 가 fallback 이다 — Router 가 판단하지 못하거나 오류가 나면 여기로 간다.
 # 그래서 영역을 넘나드는 질문을 받아줄 수 있도록 allowed_groups 가 가장 넓어야 한다.
 # agent 가 1개면 Router 는 skill 선택에만 쓰인다.
+# route_criteria: Jev 방식 agent 선택(hub/jev.py)에 쓰는 기준 — 포함 · 제외를 자연어로. 신뢰도가 낮으면 첫 번째 agent(Coris)로.
 agents:
   - id: coris
     name: Coris
     description: 범용 업무 어시스턴트 — 조회 · 정리 · 분석
     route_hint: |
       일반적인 업무 질문, 데이터 조회, 여러 영역에 걸친 질문.
-    allowed_groups: [general, notice, metric, insp, code]
-    default_groups: [general, notice, metric, insp, code]
+    route_criteria:
+      include: 설비 · 공정 데이터 조회(가동률 · WPH · OEE · Lot 이력 · 지표 추이 · INSP), 집계 · 차트 · 계산, 공지, 일반 질문, 여러 영역에 걸친 질문
+      exclude: 기준 · 절차 · 정의만 묻는 지식 질문(→ Ceeria), Hold Lot 처리 · 해제 판단(→ Trouble Lot)
+    allowed_groups: [general, notice, metric, insp, fab, knowledge, code]
+    default_groups: [general, notice, metric, insp, fab, code]
     include_imported: true   # 화면(MCP)에서 등록한 서버의 tool 도 쓸 수 있다
     prompt: |
       당신은 사내 업무 어시스턴트 'Coris' 입니다.
       - 현황과 수치는 반드시 tool 로 조회한 결과만 근거로 답합니다.
       - 질문이 여러 영역에 걸치면 필요한 tool 을 함께 호출해 한 답변으로 종합합니다.
+
+  - id: ceeria
+    name: Ceeria
+    description: C/C 지식 챗봇 — 기준 · SOP · 용어 · 절차 문서 검색 답변
+    route_hint: |
+      C/C 관련 기준 · 규정 · SOP · 용어 정의 · 처리 절차를 묻는 지식 질문.
+    route_criteria:
+      include: C/C 관련 지식 — 기준 · 규정 · SOP · 용어 정의(PM · BM 등) · 처리 절차 · '어떻게 해야 해?' · '기준이 뭐야?'
+      exclude: 실제 설비 · Lot 데이터 조회나 수치 계산이 필요한 질문, 특정 Hold Lot 처리
+    allowed_groups: [general, knowledge]
+    default_groups: [general, knowledge]
+    prompt: |
+      당신은 C/C 지식 챗봇 'Ceeria' 입니다.
+      - 반드시 search_knowledge 로 찾은 문서 내용만 근거로 답하고, 문장마다 출처(문서 id · 섹션)를 붙입니다.
+      - 문서에 없는 내용은 '문서에서 찾지 못했습니다' 라고 답하고 추측하지 않습니다.
+
+  - id: trouble_lot
+    name: Trouble Lot
+    description: Hold Lot 처리 — Hold 현황 · 사유 · 이력 · 관련 설비 확인 · 해제 전 확인 사항
+    route_hint: |
+      Hold 걸린 Lot 처리, Hold 사유 · 이력 확인, 해제 판단.
+    route_criteria:
+      include: Hold 걸린 Lot 처리 · 원인 · 이력 확인, Hold 해제 전 확인, 특정 Lot 의 이상 · 트러블 대응
+      exclude: Hold 와 무관한 일반 설비 효율 · 추이 조회, 기준 · 정의만 묻는 지식 질문
+    allowed_groups: [general, fab, knowledge, code]
+    default_groups: [general, fab, knowledge]
+    prompt: |
+      당신은 Hold Lot 처리를 돕는 'Trouble Lot' 에이전트입니다.
+      - Lot 이력(get_lot_history)으로 Hold 사유 · 발생 step · 설비 · 시간을 확인합니다.
+      - 같은 설비의 효율(get_eqp_efficiency, BM · 가동률)과 같은 시간대 다른 Lot 영향을 함께 확인합니다.
+      - 처리 기준은 search_knowledge 로 찾은 문서를 출처와 함께 인용합니다.
+      - 마지막에 '해제 전 확인 사항' 을 3줄 이내로 정리합니다. 해제 · 재투입 같은 실행은 하지 않고 제안만 합니다.
 
 # 포탈 화면에 보일 외부 시스템 — 실제 health check 연동 전까지 고정 상태값
 portals:

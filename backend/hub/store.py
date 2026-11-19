@@ -1,5 +1,5 @@
 """
-Hub JSON 파일 저장소 — 대화 / 스킬 사용 기록 / 이벤터 / 화면에서 등록한 MCP 서버.
+Hub JSON 파일 저장소 — 대화 / 스킬 사용 기록 / 이벤터 · 작업 큐 / 화면에서 등록한 MCP 서버 · tool 그룹.
 
 사내 DB 연동 전까지 backend/data/hub.json 한 파일에 저장한다.
 프로세스 하나(uvicorn 단일 worker) 기준이며, 쓰기는 lock 으로 직렬화한다.
@@ -13,7 +13,8 @@ from typing import Optional
 
 DATA_PATH = Path(__file__).resolve().parent.parent / "data" / "hub.json"
 # skills 는 SKILL.md 폴더로 옮겼다(hub/skills.py) — 남은 "skills" 는 이전 데이터 이관용으로만 읽는다
-COLLECTIONS = ("conversations", "skills", "skill_stats", "events", "mcp_servers")
+# tasks = 이벤터 작업 큐(task table), tool_groups = 그룹 메뉴에서 만든 tool 그룹
+COLLECTIONS = ("conversations", "skills", "skill_stats", "events", "mcp_servers", "tasks", "tool_groups")
 
 _lock = threading.Lock()
 _cache: Optional[dict] = None
@@ -95,3 +96,14 @@ def delete_item(coll: str, item_id: str) -> bool:
             _flush()
             return True
     return False
+
+
+def delete_where(coll: str, pred) -> int:
+    """조건에 맞는 항목을 한 번에 지운다 — 지운 개수."""
+    with _lock:
+        items = _load()[coll]
+        n = len(items)
+        items[:] = [x for x in items if not pred(x)]
+        if len(items) != n:
+            _flush()
+        return n - len(items)

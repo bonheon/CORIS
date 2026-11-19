@@ -13,10 +13,20 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 from routers.chat import router as chat_router  # noqa: E402
 from routers.hub import router as hub_router  # noqa: E402
 from routers.ui import router as ui_router  # noqa: E402
-from hub import catalog, skills  # noqa: E402
-from hub.service import scheduler_loop  # noqa: E402
+from hub import catalog, skills, storage  # noqa: E402
+from hub.service import scheduler_loop, task_worker  # noqa: E402
 
 log = logging.getLogger("main")
+
+
+async def storage_cleanup_loop(interval_s: int = 6 * 3600) -> None:
+    """보관 기간(STORAGE_TTL_DAYS)이 지난 tool 결과 정리 — local 저장소만 (S3 는 버킷 lifecycle 규칙)."""
+    while True:
+        try:
+            await asyncio.to_thread(storage.cleanup)
+        except Exception:  # noqa: BLE001
+            log.exception("storage cleanup failed")
+        await asyncio.sleep(interval_s)
 
 
 async def mcp_refresh_loop(interval_s: int) -> None:
@@ -36,8 +46,10 @@ async def lifespan(_: FastAPI):
         await catalog.refresh()
     except Exception:  # noqa: BLE001 — MCP 설정 오류여도 기동은 한다 (tool 없이)
         log.exception("MCP initial load failed")
-    tasks = [asyncio.create_task(mcp_refresh_loop(int(os.getenv("MCP_REFRESH_SEC", "60"))))]
-    # 이벤터 자동 실행은 OpenAI 호출 비용이 드므로 명시적으로 켤 때만 동작
+    tasks = [asyncio.create_task(mcp_refresh_loop(int(os.getenv("MCP_REFRESH_SEC", "60")))),
+             asyncio.create_task(task_worker()),   # 작업 큐 — '지금 실행' 도 큐를 거치므로 항상 띄운다
+             asyncio.create_task(storage_cleanup_loop())]
+    # 이벤터 자동 실행(정해진 시각에 큐에 넣기)은 OpenAI 호출 비용이 드므로 명시적으로 켤 때만 동작
     if os.getenv("HUB_SCHEDULER") == "1":
         tasks.append(asyncio.create_task(scheduler_loop()))
     yield

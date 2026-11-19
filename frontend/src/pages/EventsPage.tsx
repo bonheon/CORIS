@@ -1,8 +1,11 @@
-import React, { useState } from "react";
-import { Pencil, Play, Plus, X } from "lucide-react";
-import { api, EventInput, HubEvent } from "../api";
+import React, { useCallback, useMemo, useState } from "react";
+import { ListChecks, Pencil, Play, Plus, X } from "lucide-react";
+import { api, EventInput, HubEvent, HubTask } from "../api";
 import { useHub } from "../hub";
 import { fmtShort, WEEKDAYS } from "../lib/hooks";
+import { queueOf, TaskStatusPill, useTasks } from "../lib/tasks";
+
+// 스케줄링 — 질문 · 스킬을 정해진 시각에 작업 큐로 넣는다. 작업 큐 · 기록은 '작업 목록' 화면(TasksPage).
 
 const EMPTY: EventInput = {
   name: "", schedule: { kind: "daily", time: "07:30", weekday: null },
@@ -13,12 +16,19 @@ const scheduleLabel = (e: Pick<HubEvent, "schedule">) =>
   e.schedule.kind === "daily" ? "매일" : `매주 ${WEEKDAYS[e.schedule.weekday ?? 0]}`;
 
 export default function EventsPage({ navigate }: { navigate: (p: string) => void }) {
-  const { events, skills, conversations, refreshEvents, refreshConversations, agentName, toast } = useHub();
-  const [running, setRunning] = useState<Set<string>>(new Set());
+  const { events, skills, refreshEvents, refreshConversations, agentName, toast } = useHub();
   const [editing, setEditing] = useState<{ id: string | null; form: EventInput } | null>(null);
+  const onFinish = useCallback(() => { refreshEvents(); refreshConversations(); }, [refreshEvents, refreshConversations]);
+  const [tasks, reloadTasks] = useTasks(onFinish);
 
-  const history = conversations.filter((c) => c.source === "event").slice(0, 12);
   const failed = events.filter((e) => e.last_run?.status === "error");
+  const queue = useMemo(() => queueOf(tasks), [tasks]);
+  // 이벤트별 진행 중 작업 — 실행 중이 우선, 아니면 가장 앞 차례
+  const pending = useMemo(() => {
+    const m = new Map<string, HubTask>();
+    queue.forEach((t) => { if (!m.has(t.event_id)) m.set(t.event_id, t); });
+    return m;
+  }, [queue]);
 
   const toggle = async (e: HubEvent) => {
     await api.toggleEvent(e.id, !e.enabled);
@@ -26,16 +36,18 @@ export default function EventsPage({ navigate }: { navigate: (p: string) => void
   };
 
   const run = async (e: HubEvent) => {
-    setRunning((s) => new Set(s).add(e.id));
     try {
-      const res = await api.runEvent(e.id);
-      toast(res.last_run?.status === "ok" ? `'${e.name}' 실행 완료` : `'${e.name}' 실행 실패`);
+      const t = await api.runEvent(e.id);
+      toast(t.position && t.position > 1 ? `'${e.name}' 작업 큐에 넣었습니다 — ${t.position}번째 대기` : `'${e.name}' 작업 큐에 넣었습니다`);
     } catch {
       toast("실행 요청에 실패했습니다");
-    } finally {
-      setRunning((s) => { const n = new Set(s); n.delete(e.id); return n; });
-      await Promise.all([refreshEvents(), refreshConversations()]);
     }
+    await reloadTasks();
+  };
+
+  const cancel = async (t: HubTask) => {
+    try { await api.cancelTask(t.id); toast("대기 작업을 취소했습니다"); } catch (err: any) { toast(err.message); }
+    await reloadTasks();
   };
 
   const openEdit = (e?: HubEvent) =>
@@ -45,20 +57,23 @@ export default function EventsPage({ navigate }: { navigate: (p: string) => void
 
   return (
     <section className="center">
-      <header className="c-head"><b>이벤터</b></header>
+      <header className="c-head"><b>스케줄링</b></header>
       <div className="scroll">
         <div className="inner wide">
           <div className="page-head">
             <div>
-              <h1>이벤터</h1>
-              <p>질문이나 스킬을 정해진 시간에 실행합니다. 결과는 대화 목록에 "자동"으로 남습니다.</p>
+              <h1>스케줄링</h1>
+              <p>질문이나 스킬을 정해진 시간에 실행합니다. 실행은 <b>작업 큐</b>에 쌓여 한 번에 한 건씩 순서대로 처리됩니다 — 진행 상황과 결과는 <b>작업 목록</b>에서 봅니다.</p>
             </div>
-            <button className="btn primary" onClick={() => openEdit()}><Plus size={15} />스케줄 추가</button>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button className="btn" onClick={() => navigate("/tasks")}><ListChecks size={15} />작업 목록</button>
+              <button className="btn primary" onClick={() => openEdit()}><Plus size={15} />스케줄 추가</button>
+            </div>
           </div>
 
           {failed.length > 0 && (
             <div className="note err" style={{ marginBottom: 14 }}>
-              최근 실행이 실패한 이벤트가 {failed.length}건 있습니다: {failed.map((e) => e.name).join(", ")}
+              최근 실행이 실패한 스케줄이 {failed.length}건 있습니다: {failed.map((e) => e.name).join(", ")}
             </div>
           )}
 
@@ -71,7 +86,7 @@ export default function EventsPage({ navigate }: { navigate: (p: string) => void
                 <tbody>
                   {events.map((e) => {
                     const skill = skills.find((s) => s.id === e.skill_id);
-                    const busy = running.has(e.id);
+                    const p = pending.get(e.id);
                     return (
                       <tr key={e.id} className={e.enabled ? "" : "off"}>
                         <td className="when-cell num">{e.schedule.time}<small>{scheduleLabel(e)}</small></td>
@@ -86,7 +101,7 @@ export default function EventsPage({ navigate }: { navigate: (p: string) => void
                           </div>
                         </td>
                         <td>
-                          {busy ? <span className="pill mute"><span className="spin" />실행 중</span>
+                          {p ? <TaskStatusPill t={p} />
                             : e.last_run ? (
                               <button
                                 className={`pill ${e.last_run.status === "ok" ? "ok" : "err"}`}
@@ -101,7 +116,7 @@ export default function EventsPage({ navigate }: { navigate: (p: string) => void
                         <td>
                           <div style={{ display: "flex", gap: 6, alignItems: "center", justifyContent: "flex-end" }}>
                             <button className="ib" title="수정" onClick={() => openEdit(e)}><Pencil size={14} /></button>
-                            <button className="btn sm" onClick={() => run(e)} disabled={busy}><Play size={13} />실행</button>
+                            <button className="btn sm" onClick={() => run(e)} title="작업 큐에 넣기"><Play size={13} />실행</button>
                             <button className={`toggle ${e.enabled ? "on" : ""}`} onClick={() => toggle(e)} aria-label={e.enabled ? "끄기" : "켜기"} />
                           </div>
                         </td>
@@ -115,23 +130,20 @@ export default function EventsPage({ navigate }: { navigate: (p: string) => void
 
             <div>
               <div className="panel">
-                <div className="panel-h"><b>실행 기록</b></div>
-                <div className="timeline">
-                  {!history.length && <div className="muted" style={{ fontSize: 12.5, padding: "8px 0" }}>아직 실행 기록이 없습니다. "실행"을 눌러 바로 돌려볼 수 있습니다.</div>}
-                  {history.map((c) => (
-                    <div key={c.id} className="tl">
-                      <time className="num">{fmtShort(c.updated_at)}</time>
-                      <div className="rd"><i /></div>
-                      <div>
-                        <button onClick={() => navigate(`/c/${c.id}`)}><b>{c.title}</b></button>
-                        <small>{c.summary}</small>
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                <div className="panel-h"><b>작업 큐</b><small>{queue.length ? `${queue.length}건` : "비어 있음"}</small><button className="link" onClick={() => navigate("/tasks")}>작업 목록</button></div>
+                {!queue.length && <div className="muted" style={{ fontSize: 12.5, padding: "12px 16px" }}>대기 중인 작업이 없습니다. "실행"을 누르면 큐에 들어가 차례대로 처리됩니다.</div>}
+                {queue.map((t) => (
+                  <div key={t.id} className="tk-row">
+                    <span className="tk-pos">{t.status === "running" ? <span className="spin" /> : t.position}</span>
+                    <span className="ell" title={t.prompt}><b>{t.event_name}</b></span>
+                    {t.status === "queued"
+                      ? <button className="ib" title="대기 취소" onClick={() => cancel(t)}><X size={14} /></button>
+                      : <span className="pill warn">실행 중</span>}
+                  </div>
+                ))}
               </div>
               <div className="note" style={{ fontSize: 12 }}>
-                <div>자동 실행은 백엔드를 <code className="mono">HUB_SCHEDULER=1</code> 로 띄웠을 때만 동작합니다. 꺼져 있어도 "실행" 버튼으로 바로 돌릴 수 있습니다.</div>
+                <div>예약 실행(정해진 시각에 큐에 넣기)은 백엔드를 <code className="mono">HUB_SCHEDULER=1</code> 로 띄웠을 때만 동작합니다. 같은 스케줄이 아직 대기 · 실행 중이면 그 회차는 건너뜁니다.</div>
               </div>
             </div>
           </div>
@@ -144,9 +156,9 @@ export default function EventsPage({ navigate }: { navigate: (p: string) => void
           isNew={!editing.id}
           onClose={() => setEditing(null)}
           onDelete={editing.id ? async () => {
-            if (!window.confirm("이 스케줄을 삭제할까요?")) return;
+            if (!window.confirm("이 스케줄을 삭제할까요? 대기 중인 작업도 취소됩니다.")) return;
             await api.deleteEvent(editing.id!);
-            await refreshEvents();
+            await Promise.all([refreshEvents(), reloadTasks()]);
             setEditing(null);
             toast("스케줄을 삭제했습니다");
           } : undefined}

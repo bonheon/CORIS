@@ -19,6 +19,13 @@ servers:
     transport: streamable_http
     url: ${CODE_MCP_URL:-http://localhost:8120/mcp}
 
+  # FAB 샘플 데이터 — mcp_servers/fab_sample/server.py (Lot 진행 이력 · 장비 효율, 각 약 1,000행, 마크다운 표 결과)
+  #   실행: cd mcp_servers/fab_sample && python server.py
+  fab_sample:
+    enabled: ${FAB_MCP_ENABLED:-true}
+    transport: streamable_http
+    url: ${FAB_MCP_URL:-http://localhost:8130/mcp}
+
   # ── 회사 MCP 서버 예시 ── 주소/토큰만 채우고 enabled 를 true 로
   company:
     enabled: ${COMPANY_MCP_ENABLED:-false}

@@ -16,6 +16,7 @@
               ∩ agent 허용 범위 ∩ 현재 사용 가능한 tool
    빠진 tool 은 이유와 함께 dropped 로 돌려준다 (route 이벤트 · 프롬프트에 노출).
 """
+import asyncio
 import logging
 import os
 from dataclasses import asdict, dataclass, field
@@ -24,7 +25,7 @@ from typing import Literal, Optional
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field, create_model
 
-from hub import catalog, skills
+from hub import catalog, jev, skills
 from hub.llm import chat_model
 
 log = logging.getLogger("routing")
@@ -56,6 +57,7 @@ class Plan:
     skill_id: Optional[str] = None
     skill_name: Optional[str] = None
     skill_mode: str = "none"             # none | manual | router | sticky
+    jev: Optional[dict] = None           # Jev 방식 agent 선택 결과 (확률 · 신뢰도 · 수용 여부 · ms)
 
     @property
     def unavailable(self) -> list[str]:
@@ -141,11 +143,12 @@ def plan_tools(agent_id: str, sel: ToolSelection, skill: Optional[dict],
 
 def _choice_model(cands: list[str], skill_ids: list[str]) -> type[BaseModel]:
     """응답 스키마를 후보 id 의 enum 으로 만든다 — 프롬프트로 부탁하는 대신 후보 밖 값을 구조적으로 막는다."""
+    # reason 을 먼저 — id 를 먼저 고르면 모델이 고른 뒤 근거를 끼워 맞춘다 (예: 'ETCH-03 BM 시간' → 공지 브리핑)
     return create_model(
         "RouteChoice",
+        reason=(str, Field(description="질문이 요청하는 것(어떤 데이터 · 업무)을 한 문장으로 — 그 다음 skill 업무와 같은지 판단")),
         agent_id=(Literal[tuple(cands)], Field(description="처리할 agent")),
-        skill_id=(Literal[tuple(skill_ids + [NO_SKILL])], Field(description=f"적용할 skill, 해당 없으면 '{NO_SKILL}'")),
-        reason=(str, Field(description="한 문장 근거")),
+        skill_id=(Literal[tuple(skill_ids + [NO_SKILL])], Field(description=f"적용할 skill, 질문 업무가 skill 업무와 같을 때만. 아니면 '{NO_SKILL}'")),
     )
 
 
@@ -190,9 +193,16 @@ def _router_prompt(cands: list[str], prev: Optional[str], skill: Optional[dict],
         cards = "\n".join(
             f"- id: {s['id']} ({s['name']})\n  {s['description'][:SKILL_DESC_CHARS]}" for s in skill_cands
         )
+        # skill 없이 tool 로 바로 조회되는 데이터 — 이걸 모르면 'ETCH-03 BM 시간' 같은 조회를 일정 · 공지 업무로 오해한다
+        groups = {g for c in cands for g in catalog.agent_groups(c, "allowed_groups")}
+        data = "\n".join(
+            f"- {g['name']}: {g.get('description', '')} (tool: {', '.join(catalog.TOOL_LABELS.get(n, n) for n in g['tools'])})"
+            for g in catalog.GROUPS if g["id"] in groups
+        )
         lines += [
+            "", "[tool 로 바로 조회되는 데이터] 아래 데이터를 묻는 질문은 skill 없이 처리됩니다:", data,
             "", "[skill] 업무 workflow 절차입니다. 질문이 아래 skill 의 업무를 해 달라는 요청일 때만 그 id 를 고르세요.",
-            f"특정 데이터 하나만 묻는 단발 조회, 일반 질문, 애매한 경우는 '{NO_SKILL}' 입니다.", "", cards,
+            f"특정 데이터 하나만 묻는 단발 조회, 위 데이터 조회, 일반 질문, 애매한 경우는 '{NO_SKILL}' 입니다.", "", cards,
         ]
         prev_card = next((s for s in skill_cands if s["id"] == prev_skill), None)
         if prev_card:
@@ -265,8 +275,29 @@ async def resolve(messages: list[dict], agent_id: Optional[str], skill: Optional
     # auto, 또는 옛 agent id(line/defect/yield 등) — 자동 분기로 처리
     cands = [agent_id] if manual_agent else candidates(sel, skill)
     skill_cands = skill_candidates(cands, skill_pool) if not skill and (pool_explicit or AUTO_SKILL) else []
+    if jev.MODE == "jev" and not manual_agent and len(cands) > 1:
+        return await _resolve_jev(messages, sel, skill, cands, skill_cands, prev_agent, prev_skill)
     r = await route(messages, prev_agent, cands, skill, skill_cands, prev_skill)
     if manual_agent:
         reason = "사용자가 agent 를 지정" + (f" · {r.reason}" if r.skill else "")
         return plan_tools(agent_id, sel, skill or r.skill, "manual", reason, "manual" if skill else r.skill_mode)
     return plan_tools(r.agent_id, sel, skill or r.skill, r.mode, r.reason, "manual" if skill else r.skill_mode)
+
+
+async def _resolve_jev(messages: list[dict], sel: ToolSelection, skill: Optional[dict], cands: list[str],
+                       skill_cands: list[dict], prev_agent: Optional[str], prev_skill: Optional[str]) -> Plan:
+    """agent 는 Jev 방식(hub/jev.py)으로, skill 은 기존 Router 로 — 둘을 동시에 돌려 시간이 늘지 않게 한다.
+    Router 가 고른 agent 는 쓰지 않는다. 고른 skill 을 Jev agent 가 실행할 수 없으면 skill 을 버린다."""
+    skill_task = asyncio.create_task(route(messages, prev_agent, cands, skill, skill_cands, prev_skill)) if skill_cands else None
+    j = await jev.choose(messages, cands, prev_agent)
+    r = await skill_task if skill_task else None
+    picked = r.skill if r else None
+    reason = j.reason
+    if picked and not _allows(j.agent_id, picked):
+        reason += f" · skill '{picked['name']}' 은 이 agent 범위 밖이라 쓰지 않음"
+        picked = None
+    mode = "sticky" if j.agent_id == prev_agent else ("router" if j.accepted else "fallback")
+    skill_mode = "manual" if skill else ("none" if not picked else ("sticky" if picked["id"] == prev_skill else "router"))
+    plan = plan_tools(j.agent_id, sel, skill or picked, mode, reason, skill_mode)
+    plan.jev = j.info()
+    return plan
