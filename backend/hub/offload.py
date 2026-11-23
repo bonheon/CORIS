@@ -158,7 +158,8 @@ def wrap(tool: BaseTool) -> BaseTool:
         sid = (config.get("configurable") or {}).get("session_id") or "default"
         return maybe_offload(_text(result), tool.name, kwargs, sid)
 
-    return StructuredTool(name=tool.name, description=tool.description, args_schema=_schema(tool), coroutine=_arun)
+    return StructuredTool(name=tool.name, description=tool.description, args_schema=_schema(tool), coroutine=_arun,
+                          metadata=tool.metadata)  # session 표시 등을 잃지 않게
 
 
 def wrap_all(tools: dict[str, BaseTool], skip: set[str]) -> dict[str, BaseTool]:

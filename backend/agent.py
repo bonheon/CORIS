@@ -15,7 +15,17 @@ LLM 이 앞서 조회한 데이터를 보지 못해 다시 조회하거나 값�
   - 프롬프트에 현재 날짜 · 시각 — "어제", "이번 주" 를 지어내지 않게
   - 대화 기록은 최근 HISTORY_TURNS 턴만 원문으로, 그 이전은 한 줄 요지로 — 긴 대화에서 길이 한도 방지
   - tool 호출이 MAX_TOOL_ROUNDS 번을 넘으면 tool 없이 지금까지 결과로 정리 — 오류로 끊기지 않게
+
+속도 장치 (ReAct 순환 횟수 줄이기)
+  - 동시 호출: 서로 의존하지 않는 조회는 한 응답에서 함께 부르라고 프롬프트에 둔다.
+    한 응답에 tool 호출이 여럿이면 ToolNode 가 동시에 실행한다 → LLM 왕복이 그만큼 준다.
+  - 반복 차단: 같은 질문 안에서 같은 tool · 같은 인자를 다시 부르면 실행하지 않고 안내만 돌려준다
+    (오류가 났던 호출은 DUP_ERROR_RETRY 번까지 다시 허용). 대화 상태를 쓰는 tool(run_python 등)과
+    AGENT_DUP_EXCLUDE 는 빼고 판단한다. 반복만 하는 라운드가
+    DUP_WRAP_ROUNDS 번이면 더 돌지 않고 정리한다.
 """
+import json
+import logging
 import os
 import time
 from datetime import datetime
@@ -29,7 +39,8 @@ from langgraph.prebuilt import ToolNode, tools_condition
 
 from hub.catalog import AGENTS_BY_ID, TOOLS_BY_NAME
 from hub.llm import chat_model
-from hub import catalog, routing, skills, store, steps
+from hub import catalog, routing, skills, store, steps, timing
+from hub.session_tools import is_session
 from hub.routing import Plan
 
 MODEL = os.getenv("AGENT_MODEL", "gpt-4o")
@@ -40,6 +51,12 @@ HISTORY_TURNS = int(os.getenv("AGENT_HISTORY_TURNS", "10"))     # 원문으로 �
 DIGEST_CHARS = 120         # 오래된 턴 요지의 메시지당 길이
 TRACE_RESULT_CHARS = 3000  # 저장할 tool 결과 길이 — 큰 조회 결과가 매 턴 토큰을 먹지 않도록
 TRACE_TURNS = 3            # 최근 몇 턴의 trace 를 다시 넣을지
+DUP_ERROR_RETRY = int(os.getenv("AGENT_DUP_ERROR_RETRY", "1"))  # 오류 난 같은 호출을 다시 허용할 횟수 (일시 장애 대비)
+DUP_WRAP_ROUNDS = int(os.getenv("AGENT_DUP_WRAP_ROUNDS", "2"))  # 반복 호출만 한 라운드가 이만큼이면 정리
+DUP_EXCLUDE = {x.strip() for x in os.getenv("AGENT_DUP_EXCLUDE", "").split(",") if x.strip()}  # 반복 차단에서 뺄 tool
+DUP_MARK = "[반복 호출 — 실행하지 않음]"
+
+log = logging.getLogger("agent")
 
 SYSTEM_PROMPT = """당신은 사내 업무 AI 어시스턴트 Coris 입니다.
 사용자의 질문에 맞는 도구를 사용해 데이터를 조회 · 분석하고, 명확하고 전문적인 답변을 제공합니다.
@@ -47,6 +64,8 @@ SYSTEM_PROMPT = """당신은 사내 업무 AI 어시스턴트 Coris 입니다.
 [원칙]
 - 사용자가 요청하는 기능은 순서 없이 즉시 실행하세요. 안내에 적힌 순서는 권장일 뿐 강제가 아닙니다.
 - 조회가 필요하면 "잠시만 기다려 주세요" 같은 안내 없이 바로 tool 을 호출하세요. tool 을 부르지 않고 턴을 끝내면 사용자는 아무 결과도 받지 못합니다.
+- 서로 결과에 의존하지 않는 조회(여러 장비 · 여러 Lot · 여러 지표 등)는 한 번의 응답에서 tool 을 여러 개 함께 호출하세요. 하나씩 차례로 부르면 그만큼 답변이 늦어집니다. 앞 결과가 있어야 인자를 정할 수 있는 조회만 차례로 호출합니다.
+- 이번 질문에서 이미 같은 인자로 조회한 tool 은 다시 부르지 말고 받은 결과를 쓰세요. 결과가 비었거나 부족하면 인자(기간 · 조건)를 바꾸거나, 확인하지 못했다고 답하세요.
 - 아래 [tool 안내] 에 차트 태그가 있는 tool 을 썼다면, 그 형식 그대로 태그를 응답에 포함해 시각화하세요.
 - 항상 한국어로 응답합니다."""
 
@@ -64,7 +83,9 @@ def _now_line() -> str:
 
 def build_prompt(plan: Plan, skill: Optional[dict], user_memory: str = "") -> str:
     agent = AGENTS_BY_ID[plan.agent_id]
-    prompt = SYSTEM_PROMPT + f"\n\n{_now_line()}\n\n[에이전트: {agent['name']}]\n{agent['prompt'].strip()}"
+    # 잘 안 바뀌는 것 → 자주 바뀌는 것 순서. LLM 서버의 프롬프트 캐시는 앞부분이 같을 때만 맞으므로
+    # 분 단위로 바뀌는 현재 시각은 맨 끝에 둔다 (앞에 두면 그 뒤 agent 프롬프트 · tool 안내까지 캐시가 깨진다)
+    prompt = SYSTEM_PROMPT + f"\n\n[에이전트: {agent['name']}]\n{agent['prompt'].strip()}"
     guides = [f"■ {n}\n{catalog.TOOL_GUIDES[n].strip()}" for n in plan.tools if n in catalog.TOOL_GUIDES]
     if guides:  # 켜진 tool 의 안내만 — 꺼진 tool 의 설명이 들어가면 없는 tool 을 부르려 한다
         prompt += "\n\n[tool 안내]\n" + "\n\n".join(guides)
@@ -81,7 +102,7 @@ def build_prompt(plan: Plan, skill: Optional[dict], user_memory: str = "") -> st
             f"\n\n[사용 불가 tool] {', '.join(plan.unavailable)} — 지금 응답하지 않는 tool 입니다. "
             f"이 데이터가 필요한 질문이면 조회할 수 없다고 분명히 알리고 추정으로 채우지 마세요."
         )
-    return prompt
+    return prompt + f"\n\n{_now_line()}"
 
 
 def _tool_rounds(messages: list[BaseMessage]) -> int:
@@ -95,6 +116,90 @@ def _tool_rounds(messages: list[BaseMessage]) -> int:
     return n
 
 
+def _this_question(messages: list[BaseMessage]) -> list[BaseMessage]:
+    """마지막 사용자 질문 이후 메시지 — 이전 턴 trace 는 반복 판단에 넣지 않는다 (데이터가 바뀌었을 수 있다)."""
+    for i in range(len(messages) - 1, -1, -1):
+        if isinstance(messages[i], HumanMessage):
+            return messages[i + 1:]
+    return messages
+
+
+def _call_key(name: str, args: dict) -> str:
+    return name + json.dumps(args or {}, sort_keys=True, ensure_ascii=False, default=str)
+
+
+def _past_calls(messages: list[BaseMessage]) -> dict[str, dict]:
+    """이번 질문에서 실행한 호출 — key → {ok: 성공 횟수, err: 오류 횟수}. 반복 안내로 끝난 호출은 세지 않는다."""
+    calls: dict[str, str] = {}  # tool_call_id → key
+    seen: dict[str, dict] = {}
+    for m in _this_question(messages):
+        if isinstance(m, AIMessage):
+            for c in m.tool_calls:
+                calls[c["id"]] = _call_key(c["name"], c["args"])
+        elif isinstance(m, ToolMessage) and m.tool_call_id in calls:
+            if isinstance(m.content, str) and m.content.startswith(DUP_MARK):
+                continue
+            s = seen.setdefault(calls[m.tool_call_id], {"ok": 0, "err": 0})
+            s["err" if m.status == "error" else "ok"] += 1
+    return seen
+
+
+def _dup_only_rounds(messages: list[BaseMessage]) -> int:
+    """이번 질문에서 모든 결과가 반복 안내뿐이었던 라운드 수."""
+    n, results = 0, None
+    for m in _this_question(messages) + [None]:
+        if m is None or isinstance(m, AIMessage):
+            if results and all(isinstance(r.content, str) and r.content.startswith(DUP_MARK) for r in results):
+                n += 1
+            results = []
+        elif isinstance(m, ToolMessage) and results is not None:
+            results.append(m)
+    return n
+
+
+def _dup_note(name: str, past: dict) -> str:
+    if past["ok"]:
+        return (f"{DUP_MARK} {name} 을(를) 이번 질문에서 같은 인자로 이미 조회했습니다. 앞의 결과를 그대로 쓰세요. "
+                f"부족하면 인자(기간 · 조건)를 바꿔 조회하거나, 지금까지 결과로 답변하세요.")
+    return (f"{DUP_MARK} {name} 을(를) 같은 인자로 {past['err']}번 호출했는데 모두 오류였습니다. "
+            f"같은 호출은 다시 하지 말고, 인자를 바꾸거나 확인하지 못했다고 답변하세요.")
+
+
+def _make_tools_node(tools: list):
+    tool_node = ToolNode(tools)
+    # 대화 상태를 쓰는 tool(run_python 등)은 같은 입력이라도 결과가 달라질 수 있다 — 반복 차단에서 뺀다
+    exempt = DUP_EXCLUDE | {t.name for t in tools if is_session(t)}
+
+    async def tools_node(state: MessagesState, config: RunnableConfig):
+        msgs = state["messages"]
+        last = msgs[-1]
+        past = _past_calls(msgs[:-1])
+        run, skipped, batch = [], {}, set()
+        for c in last.tool_calls:
+            key = _call_key(c["name"], c["args"])
+            p = past.get(key)
+            repeated = key in batch or (p and (p["ok"] or p["err"] > DUP_ERROR_RETRY))
+            if repeated and c["name"] not in exempt:
+                # 같은 응답 안 중복은 첫 호출 결과를 쓰게 한다
+                skipped[c["id"]] = ToolMessage(content=_dup_note(c["name"], p or {"ok": 1, "err": 0}),
+                                               tool_call_id=c["id"], name=c["name"])
+            else:
+                batch.add(key)
+                run.append(c)
+        if skipped:
+            log.info("반복 호출 %d건 실행 안 함: %s", len(skipped), ", ".join(m.name for m in skipped.values()))
+        if not run:
+            return {"messages": list(skipped.values())}
+        if not skipped:
+            return await tool_node.ainvoke(state, config)
+        # 새 호출만 실행 — 응답 순서는 원래 호출 순서대로 맞춘다
+        out = await tool_node.ainvoke({"messages": msgs[:-1] + [last.model_copy(update={"tool_calls": run})]}, config)
+        done = {m.tool_call_id: m for m in out["messages"]}
+        return {"messages": [skipped.get(c["id"]) or done[c["id"]] for c in last.tool_calls]}
+
+    return tools_node
+
+
 def _build_graph(tools: list):
     llm = chat_model(MODEL, temperature=TEMPERATURE, streaming=True)
     llm_with_tools = llm.bind_tools(tools) if tools else llm
@@ -102,17 +207,17 @@ def _build_graph(tools: list):
     llm_wrap_up = llm.bind_tools(tools, tool_choice="none") if tools else llm
 
     # config 를 반드시 전달해야 astream_events 가 on_chat_model_stream 을 잡는다
-    def agent_node(state: MessagesState, config: RunnableConfig):
+    async def agent_node(state: MessagesState, config: RunnableConfig):
         msgs = state["messages"]
-        if tools and _tool_rounds(msgs) >= MAX_TOOL_ROUNDS:
-            return {"messages": [llm_wrap_up.invoke(msgs + [SystemMessage(content=WRAP_UP)], config)]}
-        return {"messages": [llm_with_tools.invoke(msgs, config)]}
+        if tools and (_tool_rounds(msgs) >= MAX_TOOL_ROUNDS or _dup_only_rounds(msgs) >= DUP_WRAP_ROUNDS):
+            return {"messages": [await llm_wrap_up.ainvoke(msgs + [SystemMessage(content=WRAP_UP)], config)]}
+        return {"messages": [await llm_with_tools.ainvoke(msgs, config)]}
 
     graph = StateGraph(MessagesState)
     graph.add_node("agent", agent_node)
     graph.set_entry_point("agent")
     if tools:
-        graph.add_node("tools", ToolNode(tools))
+        graph.add_node("tools", _make_tools_node(tools))
         graph.add_conditional_edges("agent", tools_condition)
         graph.add_edge("tools", "agent")
     return graph.compile()
@@ -253,7 +358,8 @@ async def stream(messages: list[dict], plan: Plan, skill: Optional[dict],
     async for ev in graph.astream_events(
         {"messages": inputs},
         # session_id — 대화별 상태가 필요한 tool(code interpreter 등)이 쓴다 (hub/session_tools.py)
-        {"recursion_limit": RECURSION_LIMIT, "configurable": {"session_id": session_id}},
+        {"recursion_limit": RECURSION_LIMIT, "configurable": {"session_id": session_id},
+         "callbacks": timing.callbacks()},  # 응답 시간 측정 — 보통 비어 있다 (hub/timing.py)
         version="v2",
     ):
         kind = ev["event"]

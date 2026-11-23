@@ -13,7 +13,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 from routers.chat import router as chat_router  # noqa: E402
 from routers.hub import router as hub_router  # noqa: E402
 from routers.ui import router as ui_router  # noqa: E402
-from hub import catalog, skills, storage  # noqa: E402
+from hub import catalog, skills, storage, timing  # noqa: E402
 from hub.service import scheduler_loop, task_worker  # noqa: E402
 
 log = logging.getLogger("main")
@@ -49,6 +49,9 @@ async def lifespan(_: FastAPI):
     tasks = [asyncio.create_task(mcp_refresh_loop(int(os.getenv("MCP_REFRESH_SEC", "60")))),
              asyncio.create_task(task_worker()),   # 작업 큐 — '지금 실행' 도 큐를 거치므로 항상 띄운다
              asyncio.create_task(storage_cleanup_loop())]
+    monitor = timing.start_loop_monitor()  # event loop 멈춤 감시 (docs/TIMING.md) — TIMING=0 이면 끔
+    if monitor:
+        tasks.append(monitor)
     # 이벤터 자동 실행(정해진 시각에 큐에 넣기)은 OpenAI 호출 비용이 드므로 명시적으로 켤 때만 동작
     if os.getenv("HUB_SCHEDULER") == "1":
         tasks.append(asyncio.create_task(scheduler_loop()))
@@ -65,6 +68,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# 요청 도착 시각 — 응답 시간 측정이 인증 · 사용자 조회 시간까지 포함하도록 (가장 바깥에 둔다)
+app.add_middleware(timing.RequestStartMiddleware)
 
 app.include_router(chat_router)
 app.include_router(hub_router)

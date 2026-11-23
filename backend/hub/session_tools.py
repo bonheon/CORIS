@@ -33,7 +33,14 @@ def wrap(tool: BaseTool) -> BaseTool:
         sid = (config.get("configurable") or {}).get(SESSION_ARG) or "default"
         return await tool.ainvoke({**kwargs, SESSION_ARG: sid})
 
-    return StructuredTool(name=tool.name, description=tool.description, args_schema=visible, coroutine=_arun)
+    # metadata.session — 같은 입력이라도 대화 상태(커널 변수 등)에 따라 결과가 달라지는 tool 표시.
+    # agent 의 반복 호출 차단에서 빠진다 (hub/offload.py 가 다시 감싸도 metadata 는 이어진다)
+    return StructuredTool(name=tool.name, description=tool.description, args_schema=visible, coroutine=_arun,
+                          metadata={**(tool.metadata or {}), "session": True})
+
+
+def is_session(tool: BaseTool) -> bool:
+    return bool((tool.metadata or {}).get("session"))
 
 
 def wrap_all(tools: dict[str, BaseTool]) -> dict[str, BaseTool]:

@@ -88,6 +88,8 @@ cd ../frontend && npm install && npm start
 
 FAB 샘플 데이터 기준 시각은 2026-11-19 09:00, 장비 효율 기간은 2026-10-08 ~ 2026-11-18 이다.
 
+답변이 느리거나 화면이 실시간으로 안 나오면 [TIMING.md](TIMING.md) 순서로 잰다 — 서버 로그 `[timing]` · `scripts/measure_stream.py` · 브라우저 probe 로 서버 · 전송 · 화면 중 어디가 느린지 나눠 본다.
+
 ## 6. 주의 · 알려진 제한
 
 - **code interpreter 는 격리되지 않은 로컬 프로세스**(백엔드와 같은 권한). 시험용으로만 쓰고, 여러 사람에게 열기 전에 컨테이너 격리 필요 (TODO 3).
