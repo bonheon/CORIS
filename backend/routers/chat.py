@@ -27,13 +27,13 @@ import logging
 from datetime import date
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 import agent
 from db import user_store
-from hub import memory, runs, service, skills, store, suggest, uploads, vision
+from hub import memory, runs, service, skills, store, suggest, timing, uploads, vision
 from hub.users import current_user
 from hub.routing import ToolSelection, resolve
 
@@ -68,23 +68,38 @@ def _sse(payload) -> str:
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
+_sse_text = _sse
+
+
 @router.post("/chat")
-async def chat(req: ChatRequest, user: dict = Depends(current_user)):
+async def chat(req: ChatRequest, request: Request, user: dict = Depends(current_user)):
     conv_id = req.conversation_id or store.new_id("cv")
+    # 응답 시간 측정 (hub/timing.py · docs/TIMING.md) — 요청 도착부터. pre.request = 본문 읽기 + 사용자 확인(current_user)
+    t = timing.Timing("chat", t0=getattr(request.state, "t0", None), conv=conv_id, user=user["user_id"])
+    t.add("pre.request", timing.now() - t.t0)
     messages = [m.model_dump() for m in req.messages]
     user_text = next((m["content"] for m in reversed(messages) if m["role"] == "user"), "")
-    conv = store.get_item("conversations", req.conversation_id) if req.conversation_id else None
+    with t.span("db.load_conversation"):
+        conv = store.get_item("conversations", req.conversation_id) if req.conversation_id else None
     prev_agent = conv.get("routed_agent") if conv else None
     prev_skill = conv.get("routed_skill") if conv else None
     messages = _attach_traces(messages, conv)
     # 사용자에게 보이는 스킬만 — 남의 '내 스킬' id 를 넣어도 쓰이지 않는다
-    visible = {s["id"]: s for s in skills.list_items(user["user_id"], user["is_admin"])}
+    with t.span("db.skills"):
+        visible = {s["id"]: s for s in skills.list_items(user["user_id"], user["is_admin"])}
     picked = [visible[i] for i in dict.fromkeys(req.skill_ids or ([req.skill_id] if req.skill_id else [])) if i in visible]
     skill = picked[0] if len(picked) == 1 else None
     skill_pool = picked if len(picked) > 1 else list(visible.values())
-    mem = user_store.get_memory(user["user_id"])
+    with t.span("db.user_memory"):
+        mem = user_store.get_memory(user["user_id"])
 
     async def generate():
+        timing.activate(t)  # 이 안의 LangChain LLM · tool 호출이 자동으로 기록된다
+
+        def _sse(payload) -> str:  # 화면으로 보내는 이벤트 — 보낸 시각을 기록
+            t.event(payload.get("type", "?") if isinstance(payload, dict) else "?")
+            return _sse_text(payload)
+
         yield _sse({"type": "meta", "conversation_id": conv_id})
         yield _sse({"type": "user", "user_id": user["user_id"], "name": user["name"],
                     "memory_chars": len(mem["content"]) if mem else 0,
@@ -96,8 +111,10 @@ async def chat(req: ChatRequest, user: dict = Depends(current_user)):
         attachments: list[dict] = []
         suggestions: list[str] = []
         stopped = False
+        failed = False
         try:
             prepared = messages
+            vision_t0 = timing.now()
             async for ev in vision.prepare(messages):  # 첨부 이미지 → VLM 해석 (진행은 tool 처럼 보인다)
                 if ev["type"] == "prepared":
                     prepared, attachments = ev["messages"], ev["attachments"]
@@ -107,10 +124,13 @@ async def chat(req: ChatRequest, user: dict = Depends(current_user)):
                 elif ev["type"] == "tool_end" and ev["id"] in runs:
                     runs[ev["id"]].update(ms=ev["ms"], ok=ev["ok"])
                 yield _sse(ev)
-            plan = await resolve(prepared, req.agent_id, skill, req.tool_selection, prev_agent, prev_skill,
-                                 skill_pool=skill_pool, pool_explicit=len(picked) > 1)
+            t.add("vision", timing.now() - vision_t0)
+            async with t.span("router"):
+                plan = await resolve(prepared, req.agent_id, skill, req.tool_selection, prev_agent, prev_skill,
+                                     skill_pool=skill_pool, pool_explicit=len(picked) > 1)
             yield _sse(plan.event())
             applied = skill or skills.get_item(plan.skill_id)  # Router 가 고른 skill 포함
+            agent_t0 = timing.now()
             async for ev in agent.stream(prepared, plan, applied, memory.for_prompt(mem["content"] if mem else None),
                                          session_id=conv_id):
                 if ev["type"] == "delta":
@@ -125,8 +145,11 @@ async def chat(req: ChatRequest, user: dict = Depends(current_user)):
                 elif ev["type"] == "tool_end" and ev["id"] in runs:
                     runs[ev["id"]].update(ms=ev["ms"], ok=ev["ok"])
                 yield _sse(ev)
+            t.add("agent", timing.now() - agent_t0)
+            t.mark("answer_done")  # 답변 글은 여기까지 — 아래 추천 질문 · 저장은 '답변 중' 표시가 꺼지는 시점에 영향
             # 답변이 다 나간 뒤 — 화면은 이미 답을 보여주고 있고, 추천 칩만 뒤따라 붙는다
-            suggestions = await suggest.generate(user_text, "".join(text), plan.tools)
+            async with t.span("suggest"):
+                suggestions = await suggest.generate(user_text, "".join(text), plan.tools)
             if suggestions:
                 yield _sse({"type": "suggestions", "items": suggestions})
         except asyncio.CancelledError:   # 사용자가 중지 (POST /api/chat/{id}/cancel) — 그때까지의 답변은 저장
@@ -134,16 +157,21 @@ async def chat(req: ChatRequest, user: dict = Depends(current_user)):
             raise
         except Exception as e:  # noqa: BLE001
             log.exception("chat failed")
+            failed = True
             yield _sse({"type": "error", "message": str(e)[:300]})
         finally:
             if text or runs:
                 body = "".join(text) + ("\n\n_(중지됨)_" if stopped and text else "(중지됨)" if stopped else "")
-                service.save_turn(conv_id, user_text, body, list(runs.values()),
-                                  req.agent_id, skill["id"] if skill else None, routed_agent=plan.agent_id if plan else None,
-                                  routed_skill=plan.skill_id if plan else None,
-                                  route=plan.summary() if plan else None, user_id=user["user_id"], trace=trace,
-                                  attachments=attachments, suggestions=suggestions, skill_ids=[s["id"] for s in picked])
+                with t.span("db.save_turn"):
+                    service.save_turn(conv_id, user_text, body, list(runs.values()),
+                                      req.agent_id, skill["id"] if skill else None,
+                                      routed_agent=plan.agent_id if plan else None,
+                                      routed_skill=plan.skill_id if plan else None,
+                                      route=plan.summary() if plan else None, user_id=user["user_id"], trace=trace,
+                                      attachments=attachments, suggestions=suggestions,
+                                      skill_ids=[s["id"] for s in picked])
                 memory.schedule_update(user, user_text, "".join(text), list(runs.values()), date.today().isoformat())
+            t.finish("stopped" if stopped else "error" if failed else "ok")
         yield "data: [DONE]\n\n"
 
     # 답변은 백그라운드 작업으로 — 화면이 연결을 끊어도(다른 대화로 이동) 끝까지 만들어 저장한다 (hub/runs.py)

@@ -9,6 +9,8 @@
 요점: 그대로 실행하면 안 된다 — `backend/.env` 를 새로 만들고(LLM 게이트웨이 · 모델 · ADMIN_USERS),
 venv 를 새로 설치하며, `backend/data/` · `mcp_servers/code_interpreter/workspace/` 는 옮기지 않는다.
 
+응답 속도 · ReAct 반복 관련 작업은 `docs/AGENT_SPEED.md`(검토 · 적용 · 남은 작업), 측정은 `docs/TIMING.md`.
+
 ## 원칙
 
 - tool = 단순 데이터 조회 (MCP 서버). 판단 · 절차 · 보고 양식 = skill (`backend/skills/<id>/SKILL.md`). agent 는 프롬프트가 다를 때만 늘린다.

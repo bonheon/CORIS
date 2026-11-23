@@ -1,3 +1,5 @@
+import { Probe, startProbe } from "./timingProbe";
+
 // Hub 백엔드 API — 타입과 호출 함수
 
 export interface Agent {
@@ -226,6 +228,7 @@ export interface ChatHandlers {
 }
 
 export async function streamChat(body: ChatRequest, h: ChatHandlers, signal?: AbortSignal) {
+  const probe = startProbe();  // 응답 시간 측정 — localStorage coris.timing=1 일 때만 (docs/TIMING.md)
   const res = await fetch("/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -234,7 +237,12 @@ export async function streamChat(body: ChatRequest, h: ChatHandlers, signal?: Ab
   });
   if (res.status === 409) throw new Error("이 대화는 아직 답변 중입니다");
   if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
-  await readSSE(res, h);
+  probe.headers();
+  try {
+    await readSSE(res, h, probe);
+  } finally {
+    probe.finish();
+  }
 }
 
 /** 진행 중(또는 방금 끝난) 답변에 다시 연결 — 처음부터 다시 받는다. 진행 중인 답변이 없으면 false */
@@ -248,7 +256,7 @@ export async function resumeChat(convId: string, h: ChatHandlers, signal?: Abort
 
 export const cancelChat = (convId: string) => fetch(`/api/chat/${convId}/cancel`, { method: "POST" });
 
-async function readSSE(res: Response, h: ChatHandlers) {
+async function readSSE(res: Response, h: ChatHandlers, probe?: Probe) {
   const reader = res.body!.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -258,12 +266,14 @@ async function readSSE(res: Response, h: ChatHandlers) {
     buffer += decoder.decode(value, { stream: true });
     const lines = buffer.split("\n");
     buffer = lines.pop() ?? "";
+    probe?.read(lines.filter((l) => l.startsWith("data: ")).length);
     for (const line of lines) {
       if (!line.startsWith("data: ")) continue;
       const payload = line.slice(6);
       if (payload === "[DONE]") return;
       let ev: any;
       try { ev = JSON.parse(payload); } catch { continue; }
+      probe?.event(ev.type, ev.type === "meta" ? ev.conversation_id : undefined);
       switch (ev.type) {
         case "meta": h.onMeta(ev.conversation_id); break;
         case "user": { const { type, ...ctx } = ev; h.onUser(ctx as UserCtx); break; }
