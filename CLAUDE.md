@@ -10,6 +10,7 @@
 venv 를 새로 설치하며, `backend/data/` · `mcp_servers/code_interpreter/workspace/` 는 옮기지 않는다.
 
 응답 속도 · ReAct 반복 관련 작업은 `docs/AGENT_SPEED.md`(검토 · 적용 · 남은 작업), 측정은 `docs/TIMING.md`.
+대화 기록이 사라짐 · 대화 불러오기가 느림 · 답변 중 대화 열기 문제는 `docs/CONVERSATION_STABILITY.md`.
 
 ## 원칙
 
